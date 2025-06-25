@@ -8,7 +8,6 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-# ABC преобразование
 def abc_transform(media_spend, A, B, C):
     """
     ABC преобразование медиа-переменной
@@ -19,19 +18,14 @@ def abc_transform(media_spend, A, B, C):
     if len(media_spend) == 0:
         return media_spend
 
-    # Шаг 1: Adstock преобразование
     adstocked = np.zeros_like(media_spend, dtype=float)
     adstocked[0] = media_spend[0]
     for i in range(1, len(media_spend)):
         adstocked[i] = media_spend[i] + A * adstocked[i - 1]
 
-    # Шаг 2: Saturation curve (Hill transformation)
-    # Избегаем деление на ноль
     saturated = (C * adstocked) / (1 + C * adstocked + 1e-10)
 
-    # Шаг 3: Base scaling
     final = B * saturated
-
     return final
 
 
@@ -66,36 +60,6 @@ def calculate_p_values(X, y):
         return p_values[1:]  # Исключаем константу
     except:
         return np.ones(k)  # Возвращаем единицы при ошибке
-
-
-# Создание признаков (оставляем как было)
-def create_tv_features(df):
-    """
-    Создает различные группировки ТВ каналов
-    """
-    # Федеральные каналы
-    federal_channels = ['Первый Канал, ТВ Рейтинги', 'НТВ, ТВ Рейтинги', 'Пятый Канал, ТВ Рейтинги']
-    df['federal_tv'] = df[federal_channels].sum(axis=1)
-
-    # Тематические каналы
-    thematic_channels = ['Домашний, ТВ Рейтинги', 'ТВ-3, ТВ Рейтинги',
-                         'Рен ТВ, ТВ Рейтинги', 'Звезда, ТВ Рейтинги']
-    df['thematic_tv'] = df[thematic_channels].sum(axis=1)
-
-    # Региональные каналы
-    regional_channels = ['ТВ Центр, ТВ Рейтинги', 'Нишевые каналы, ТВ Рейтинги']
-    df['regional_tv'] = df[regional_channels].sum(axis=1)
-
-    # Все каналы
-    all_tv_channels = federal_channels + thematic_channels + regional_channels + ['Россия 1, ТВ Рейтинги']
-    df['all_tv'] = df[all_tv_channels].sum(axis=1)
-
-    # Конкуренты
-    competitor_channels = ['Конкурент1, ТВ Рейтинги', 'Конкурент2, ТВ Рейтинги',
-                           'Конкурент3, ТВ Рейтинги', 'Конкурент4, ТВ Рейтинги']
-    df['total_competitors'] = df[competitor_channels].sum(axis=1)
-
-    return df, all_tv_channels, competitor_channels
 
 
 def create_all_features(df):
@@ -177,13 +141,6 @@ def create_all_features(df):
     # Конкурентное давление
     df['competitive_pressure'] = df['total_competitors'] / (df['all_tv'] + 1)
 
-    # Медиа-микс
-    df['tv_press_ratio'] = df['all_tv'] / (df['Реклама в прессе, руб.'] + 1)
-    df['total_media'] = df['all_tv'] + df['Реклама в прессе, руб.']
-
-
-    # === ФИНАЛЬНАЯ ОЧИСТКА NaN ===
-
     # Заменяем все оставшиеся NaN на 0
     numeric_columns = df.select_dtypes(include=[np.number]).columns
     df[numeric_columns] = df[numeric_columns].fillna(0)
@@ -191,12 +148,11 @@ def create_all_features(df):
     # Заменяем inf на 0 (может возникнуть при делении)
     df[numeric_columns] = df[numeric_columns].replace([np.inf, -np.inf], 0)
 
-    print(f"Создано {len(df.columns)} признаков, все NaN заменены на 0")
+    print(f"Создано {len(df.columns)}")
 
     return df
 
 
-# Упрощенный ABCOptimizer
 class ABCOptimizer:
     def __init__(self, train_data, target_col='Sales'):
         self.train_data = create_all_features(train_data.copy())
@@ -266,7 +222,7 @@ class ABCOptimizer:
         self.best_ssr = float('inf')
         self.best_params = None
 
-    def apply_abc_transformation(self, trial, data, group_name, channels):
+    def apply_abc_transformation(self, trial, data, channels):
         """
         Применяет ABC преобразование к группе каналов
         """
@@ -319,7 +275,7 @@ class ABCOptimizer:
             if self.abc_groups[group_name]:
                 # Применяем ABC преобразование
                 transformed_features, abc_params = self.apply_abc_transformation(
-                    trial, data, group_name, selected_channels
+                    trial, data, selected_channels
                 )
                 selected_features.extend(transformed_features)
                 all_abc_params.update(abc_params)
@@ -400,7 +356,7 @@ class ABCOptimizer:
             config_idx = study.best_params[f'{group_name}_config']
             best_config[group_name] = configs[config_idx]
 
-        print(f"\n🎯 ЛУЧШАЯ КОНФИГУРАЦИЯ:")
+        print(f"\nЛУЧШАЯ КОНФИГУРАЦИЯ:")
         print(f"{'─' * 60}")
         for group_name, selected_features in best_config.items():
             abc_marker = " (с ABC)" if self.abc_groups[group_name] and selected_features else ""
@@ -412,7 +368,7 @@ class ABCOptimizer:
         print(f"\nSSR: {study.best_value:.2f}")
 
         # Выводим ABC параметры
-        print(f"\n📊 ABC ПАРАМЕТРЫ:")
+        print(f"\nABC ПАРАМЕТРЫ:")
         print(f"{'─' * 60}")
         abc_params = {k: v for k, v in study.best_params.items() if
                       k.endswith('_A') or k.endswith('_B') or k.endswith('_C')}
@@ -431,29 +387,27 @@ class ABCOptimizer:
 
         return study.best_params, study.best_value
 
-    def build_final_model(self, params):
+    def _decode_configuration(self, params):
         """
-        Строит финальную модель с лучшими параметрами (новая архитектура)
+        Декодирует конфигурацию из параметров оптимизации
         """
-        data = self.train_data.copy()
-        selected_features = []
-
-        # === ДЕКОДИРУЕМ КОНФИГУРАЦИЮ ===
-
         selected_configs = {}
         for group_name, configs in self.feature_configs.items():
             config_idx = params[f'{group_name}_config']
             selected_configs[group_name] = configs[config_idx]
+        return selected_configs
 
-        # === ПРИМЕНЯЕМ ПРЕОБРАЗОВАНИЯ ===
-
+    def _apply_transformations(self, data, selected_configs, params):
+        """
+        Применяет все преобразования (ABC и обычные) к данным
+        """
+        selected_features = []
         for group_name, selected_channels in selected_configs.items():
             if selected_channels is None:
                 continue
 
-            # Проверяем нужны ли ABC преобразования
             if self.abc_groups[group_name]:
-                # Применяем ABC с сохраненными параметрами
+                # Применяем ABC преобразования
                 for channel in selected_channels:
                     param_prefix = f'{channel.replace(" ", "_").replace(",", "").replace(".", "")}'
 
@@ -469,79 +423,13 @@ class ABCOptimizer:
                 # Добавляем признаки как есть
                 selected_features.extend(selected_channels)
 
-        # === ПОДГОТОВКА ДАННЫХ ===
+        return selected_features, data
 
-        data_clean = data[selected_features + [self.target_col]].dropna()
-
-        X = data_clean[selected_features].values
-        y = data_clean[self.target_col].values
-
-        # === ОБУЧЕНИЕ МОДЕЛИ ===
-
-        model = LinearRegression()
-        model.fit(X, y)
-
-        # === РАСЧЕТ СТАТИСТИК ===
-
-        y_pred = model.predict(X)
-        ssr = np.sum((y - y_pred) ** 2)
-        r2 = model.score(X, y)
-        mse = ssr / len(y)
-        rmse = np.sqrt(mse)
-
-        # P-values
-        p_values = calculate_p_values(X, y)
-
-        # === КРАСИВЫЙ ОТЧЕТ ===
-
-        print(f"\n{'=' * 80}")
-        print(f"ФИНАЛЬНАЯ МОДЕЛЬ - РЕЗУЛЬТАТЫ")
-        print(f"{'=' * 80}")
-
-        print(f"\nКОНФИГУРАЦИЯ МОДЕЛИ:")
-        print(f"{'─' * 60}")
-        for group_name, selected_channels in selected_configs.items():
-            abc_marker = " (с ABC)" if self.abc_groups[group_name] and selected_channels else ""
-            if selected_channels is not None:
-                print(f"  {group_name.upper()}{abc_marker}: {selected_channels}")
-            else:
-                print(f"  {group_name.upper()}: НЕ ИСПОЛЬЗУЕТСЯ")
-
-        print(f"\n📈 МЕТРИКИ КАЧЕСТВА:")
-        print(f"{'─' * 50}")
-        print(f"  SSR (сумма квадратов остатков): {ssr:,.0f}")
-        print(f"  R² (коэффициент детерминации):  {r2:.4f}")
-        print(f"  RMSE (среднеквадратичная ошибка): {rmse:,.0f}")
-        print(f"  Количество признаков:           {len(selected_features)}")
-        print(f"  Количество наблюдений:          {len(data_clean)}")
-
-        print(f"\nКОЭФФИЦИЕНТЫ И ЗНАЧИМОСТЬ:")
-        print(f"{'─' * 80}")
-        print(f"{'Признак':<35} {'Коэффициент':<15} {'P-value':<12} {'Значимость':<12}")
-        print(f"{'─' * 80}")
-
-        for i, (feature, p_val) in enumerate(zip(selected_features, p_values)):
-            coef = model.coef_[i]
-
-            if p_val < 0.001:
-                significance = "***"
-                significance_text = "Высокая"
-            elif p_val < 0.01:
-                significance = "**"
-                significance_text = "Средняя"
-            elif p_val < 0.05:
-                significance = "*"
-                significance_text = "Низкая"
-            elif p_val < 0.1:
-                significance = "."
-                significance_text = "Слабая"
-            else:
-                significance = " "
-                significance_text = "Не значим"
-
-            print(f"{feature:<35} {coef:>14.4f} {p_val:>11.4f} {significance_text:<12}")
-
-        print(f"\n📝 ABC ПАРАМЕТРЫ:")
+    def _print_abc_parameters(self, params):
+        """
+        Выводит ABC параметры с интерпретацией
+        """
+        print(f"\n ABC ПАРАМЕТРЫ:")
         print(f"{'─' * 80}")
 
         # Группируем ABC параметры по каналам
@@ -556,7 +444,6 @@ class ABCOptimizer:
             B = abc_params.get(f'{channel}_B', 'N/A')
             C = abc_params.get(f'{channel}_C', 'N/A')
 
-            # Интерпретация
             if A != 'N/A':
                 if A < 0.3:
                     adstock_text = "Быстрое затухание"
@@ -577,100 +464,105 @@ class ABCOptimizer:
                 print(f"    Base (B):    {B:.3f} - Множитель эффекта")
                 print(f"    Carryover (C): {C:.3f} - {saturation_text}")
 
-        print(f"\n РЕКОМЕНДАЦИИ:")
+    def _print_model_statistics(self, model, selected_features, data_clean):
+        """
+        Выводит статистики модели и коэффициенты
+        """
+        X = data_clean[selected_features].values
+        y = data_clean[self.target_col].values
+
+        y_pred = model.predict(X)
+        ssr = np.sum((y - y_pred) ** 2)
+        r2 = model.score(X, y)
+        rmse = np.sqrt(ssr / len(y))
+
+        print(f"\n МЕТРИКИ КАЧЕСТВА:")
         print(f"{'─' * 50}")
+        print(f"  SSR (сумма квадратов остатков): {ssr:,.0f}")
+        print(f"  R² (коэффициент детерминации):  {r2:.4f}")
+        print(f"  RMSE (среднеквадратичная ошибка): {rmse:,.0f}")
+        print(f"  Количество признаков:           {len(selected_features)}")
+        print(f"  Количество наблюдений:          {len(data_clean)}")
 
-        # Анализ значимых коэффициентов
-        significant_features = [(selected_features[i], model.coef_[i], p_values[i])
-                                for i in range(len(selected_features)) if p_values[i] < 0.1]
+        p_values = calculate_p_values(X, y)
+        df_statistic_model = pd.DataFrame()
+        df_statistic_model['features'] = selected_features
+        df_statistic_model['p-values'] = p_values
+        df_statistic_model['coef'] = model.coef_
 
-        if any('abc' in feat[0] for feat in significant_features):
-            print(f"  Найдены значимые медиа-эффекты")
+        print(f"\n КОЭФФИЦИЕНТЫ И ЗНАЧИМОСТЬ:")
+        print(df_statistic_model)
 
-            # Лучший медиа канал
-            media_effects = [(feat, coef) for feat, coef, p in significant_features if 'abc' in feat]
-            if media_effects:
-                best_media = max(media_effects, key=lambda x: abs(x[1]))
-                print(f" Наиболее эффективный канал: {best_media[0].replace('_abc', '').replace('_', ' ').title()}")
-
-        if any('price' in feat[0] for feat in significant_features):
-            print(f" Обнаружено значимое влияние ценовых факторов")
-
-        if any('sales_lag' in feat[0] or 'sales_ma' in feat[0] for feat in significant_features):
-            print(f" Найдены авторегрессивные эффекты (инерция продаж)")
-
+    def build_final_model(self, params):
+        """
+        Строит финальную модель (рефакторированная версия)
+        """
         print(f"\n{'=' * 80}")
+        print(f"ФИНАЛЬНАЯ МОДЕЛЬ - РЕЗУЛЬТАТЫ")
+        print(f"{'=' * 80}")
+
+        # Подготовка данных
+        data = self.train_data.copy()
+
+        # Декодируем конфигурацию
+        selected_configs = self._decode_configuration(params)
+        # Применяем преобразования
+        selected_features, data = self._apply_transformations(data, selected_configs, params)
+
+        # Подготовка данных для модели
+        data_clean = data[selected_features + [self.target_col]].dropna()
+
+        X = data_clean[selected_features].values
+        y = data_clean[self.target_col].values
+
+        model = LinearRegression()
+        model.fit(X, y)
+
+        # print(model.get_params())
+        print(model.coef_)
+
+        self._print_model_statistics(model, selected_features, data_clean)
+        self._print_abc_parameters(params)
 
         return model, selected_features, data_clean
 
     def make_forecast(self, model, features, forecast_data, best_params):
         """
-        Делает прогноз на новых данных (новая архитектура)
+        Делает прогноз (рефакторированная версия)
         """
-
-        # === ПОДГОТОВКА ПОЛНОГО ДАТАСЕТА ===
-
-        # Объединяем тренировочные и прогнозные данные для правильных лагов и ABC
+        # Подготовка полного датасета
         full_data = pd.concat([self.train_data, forecast_data], ignore_index=True)
-
-        # Применяем создание всех признаков к полному датасету
         full_prepared = create_all_features(full_data.copy())
-        data = full_prepared.copy()
 
-        # === ДЕКОДИРУЕМ КОНФИГУРАЦИЮ ===
+        # Декодируем конфигурацию
+        selected_configs = self._decode_configuration(best_params)
 
-        selected_configs = {}
-        for group_name, configs in self.feature_configs.items():
-            config_idx = best_params[f'{group_name}_config']
-            selected_configs[group_name] = configs[config_idx]
+        # Применяем те же преобразования
+        forecast_features, data = self._apply_transformations(full_prepared, selected_configs, best_params)
 
-        # === ПРИМЕНЯЕМ ТЕ ЖЕ ПРЕОБРАЗОВАНИЯ ===
+        # Проверяем соответствие признаков
+        if set(forecast_features) != set(features):
+            print("  Несоответствие признаков между обучением и прогнозом")
+            print(f"   Ожидается: {features}")
+            print(f"   Получено:  {forecast_features}")
+            return None, None
 
-        forecast_features = []
-
-        for group_name, selected_channels in selected_configs.items():
-            if selected_channels is None:
-                continue
-
-            if self.abc_groups[group_name]:
-                # Применяем ABC с теми же параметрами
-                for channel in selected_channels:
-                    param_prefix = f'{channel.replace(" ", "_").replace(",", "").replace(".", "")}'
-
-                    A = best_params[f'{param_prefix}_A']
-                    B = best_params[f'{param_prefix}_B']
-                    C = best_params[f'{param_prefix}_C']
-
-                    transformed = abc_transform(data[channel].values, A, B, C)
-                    transformed_feature_name = f'{param_prefix}_abc'
-                    data[transformed_feature_name] = transformed
-                    forecast_features.append(transformed_feature_name)
-            else:
-                # Добавляем признаки как есть
-                forecast_features.extend(selected_channels)
-
-        # === ВЫДЕЛЯЕМ ПРОГНОЗНЫЙ ПЕРИОД ===
-
+        # Выделяем прогнозный период
         train_len = len(self.train_data)
         forecast_portion = data.iloc[train_len:].copy()
 
-        # Проверяем что все нужные признаки есть
-        if not all(feat in forecast_portion.columns for feat in forecast_features):
-            missing = [feat for feat in forecast_features if feat not in forecast_portion.columns]
-            print(f"Отсутствующие признаки: {missing}")
+        # Проверяем наличие признаков
+        missing_features = [feat for feat in features if feat not in forecast_portion.columns]
+        if missing_features:
+            print(f"Отсутствующие признаки: {missing_features}")
             return None, None
 
-        # === ПРОГНОЗИРОВАНИЕ ===
+        # Подготовка данных для прогноза
+        X_forecast = forecast_portion[features].values
 
-        # Подготавливаем данные (все NaN уже заменены на 0 в create_all_features)
-        X_forecast = forecast_portion[forecast_features].values
-
-        # Проверяем на NaN (на всякий случай)
         if np.any(np.isnan(X_forecast)):
-            print("Найдены NaN в прогнозных данных, заменяем на 0")
             X_forecast = np.nan_to_num(X_forecast, 0)
 
-        # Делаем прогноз
         y_forecast = model.predict(X_forecast)
 
         print(f"Прогноз выполнен для {len(y_forecast)} наблюдений")
@@ -695,7 +587,7 @@ def main():
 
     # Оптимизация
     optimizer = ABCOptimizer(train_data)
-    best_params, best_ssr = optimizer.optimize(n_trials=2000)
+    best_params, best_ssr = optimizer.optimize(n_trials=20)
 
     # Построение финальной модели
     final_model, features, clean_data = optimizer.build_final_model(best_params)
@@ -713,10 +605,9 @@ def main():
 
         print(f"\nКАЧЕСТВО ПРОГНОЗА:")
         print(f"{'─' * 50}")
-        print(f"  SSR на прогнозном периоде: {forecast_ssr:,.0f}")
+        # print(f"  SSR на прогнозном периоде: {forecast_ssr:,.0f}")
         print(f"  RMSE прогноза: {np.sqrt(forecast_ssr / len(actual_forecast)):,.0f}")
 
-        # Сохранение результатов
         results_df = pd.DataFrame({
             'Week': forecast_data['Week'].iloc[:len(forecast_predictions)],
             'Actual': actual_forecast,
