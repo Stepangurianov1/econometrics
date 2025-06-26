@@ -41,14 +41,10 @@ def calculate_p_values(X, y):
     X_with_const = np.column_stack([np.ones(n), X])
 
     try:
-        # Вычисляем коэффициенты
         beta = np.linalg.inv(X_with_const.T @ X_with_const) @ X_with_const.T @ y
-
-        # Предсказания и остатки
         y_pred = X_with_const @ beta
         residuals = y - y_pred
 
-        # Стандартная ошибка
         mse = np.sum(residuals ** 2) / (n - k - 1)
         var_beta = mse * np.linalg.inv(X_with_const.T @ X_with_const)
         se_beta = np.sqrt(np.diag(var_beta))
@@ -112,7 +108,7 @@ def create_all_features(df):
     df['price_volatility'] = df['price_ratio'].rolling(window=8).std().fillna(0)
 
     # === СЕЗОННЫЕ ПРИЗНАКИ ===
-
+    # print(df['Week'])
     df['month'] = df['Week'].dt.month
     df['quarter'] = df['Week'].dt.quarter
     df['week_of_year'] = df['Week'].dt.isocalendar().week
@@ -315,7 +311,6 @@ class ABCOptimizer:
 
             if np.any(np.isnan(y_pred)) or np.any(np.isinf(y_pred)):
                 return float('inf')
-
             media_penalty = 0
             for i, feature in enumerate(selected_features):
                 if 'abc' in feature:  # Это медиа-признак
@@ -425,52 +420,13 @@ class ABCOptimizer:
 
         return selected_features, data
 
-    def _print_abc_parameters(self, params):
-        """
-        Выводит ABC параметры с интерпретацией
-        """
-        print(f"\n ABC ПАРАМЕТРЫ:")
-        print(f"{'─' * 80}")
-
-        # Группируем ABC параметры по каналам
-        abc_params = {k: v for k, v in params.items() if k.endswith('_A') or k.endswith('_B') or k.endswith('_C')}
-        channels = set()
-        for param_name in abc_params.keys():
-            channel = param_name.rsplit('_', 1)[0]
-            channels.add(channel)
-
-        for channel in sorted(channels):
-            A = abc_params.get(f'{channel}_A', 'N/A')
-            B = abc_params.get(f'{channel}_B', 'N/A')
-            C = abc_params.get(f'{channel}_C', 'N/A')
-
-            if A != 'N/A':
-                if A < 0.3:
-                    adstock_text = "Быстрое затухание"
-                elif A < 0.6:
-                    adstock_text = "Умеренное затухание"
-                else:
-                    adstock_text = "Долгое затухание"
-
-                if C < 1.0:
-                    saturation_text = "Низкое насыщение"
-                elif C < 3.0:
-                    saturation_text = "Умеренное насыщение"
-                else:
-                    saturation_text = "Высокое насыщение"
-
-                print(f"\n  {channel.replace('_', ' ').title()}:")
-                print(f"    Adstock (A): {A:.3f} - {adstock_text}")
-                print(f"    Base (B):    {B:.3f} - Множитель эффекта")
-                print(f"    Carryover (C): {C:.3f} - {saturation_text}")
-
-    def _print_model_statistics(self, model, selected_features, data_clean):
+    def _print_model_statistics(self, model, selected_features, data_clean, params):
         """
         Выводит статистики модели и коэффициенты
         """
         X = data_clean[selected_features].values
         y = data_clean[self.target_col].values
-
+        abc_params = {k: v for k, v in params.items() if k.endswith('_A') or k.endswith('_B') or k.endswith('_C')}
         y_pred = model.predict(X)
         ssr = np.sum((y - y_pred) ** 2)
         r2 = model.score(X, y)
@@ -489,7 +445,19 @@ class ABCOptimizer:
         df_statistic_model['features'] = selected_features
         df_statistic_model['p-values'] = p_values
         df_statistic_model['coef'] = model.coef_
+        list_a = []
+        list_b = []
+        list_c = []
+        for feature in selected_features:
+            feature = feature.removesuffix("_abc")
+            list_a.append(abc_params.get(f'{feature}_A', None))
+            list_b.append(abc_params.get(f'{feature}_B', None))
+            list_c.append(abc_params.get(f'{feature}_C', None))
 
+        df_statistic_model['A'] = list_a
+        df_statistic_model['B'] = list_b
+        df_statistic_model['C'] = list_c
+        df_statistic_model.to_excel('model_params.xlsx', index=False)
         print(f"\n КОЭФФИЦИЕНТЫ И ЗНАЧИМОСТЬ:")
         print(df_statistic_model)
 
@@ -497,10 +465,8 @@ class ABCOptimizer:
         """
         Строит финальную модель (рефакторированная версия)
         """
-        print(f"\n{'=' * 80}")
         print(f"ФИНАЛЬНАЯ МОДЕЛЬ - РЕЗУЛЬТАТЫ")
         print(f"{'=' * 80}")
-
         # Подготовка данных
         data = self.train_data.copy()
 
@@ -512,6 +478,8 @@ class ABCOptimizer:
         # Подготовка данных для модели
         data_clean = data[selected_features + [self.target_col]].dropna()
 
+        data_clean.to_csv('data_with_abc.csv', index=False)
+
         X = data_clean[selected_features].values
         y = data_clean[self.target_col].values
 
@@ -521,8 +489,7 @@ class ABCOptimizer:
         # print(model.get_params())
         print(model.coef_)
 
-        self._print_model_statistics(model, selected_features, data_clean)
-        self._print_abc_parameters(params)
+        self._print_model_statistics(model, selected_features, data_clean, params)
 
         return model, selected_features, data_clean
 
@@ -587,7 +554,7 @@ def main():
 
     # Оптимизация
     optimizer = ABCOptimizer(train_data)
-    best_params, best_ssr = optimizer.optimize(n_trials=20)
+    best_params, best_ssr = optimizer.optimize(n_trials=2000)
 
     # Построение финальной модели
     final_model, features, clean_data = optimizer.build_final_model(best_params)
