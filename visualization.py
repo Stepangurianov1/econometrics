@@ -51,6 +51,7 @@ def add_abc(abc_params_dict, data_wo_abc):
                 original_values = data_wo_abc[original_feature].values
                 abc_transformed = abc_transform(original_values, A, B, C)
                 feature_name = f'{original_feature}_abc'
+                print(feature_name, 'feature_name')
                 data_wo_abc[feature_name] = abc_transformed
                 applied_params[a_key] = A
                 applied_params[b_key] = B
@@ -60,11 +61,6 @@ def add_abc(abc_params_dict, data_wo_abc):
                 print(f"Исходная фича не найдена: {original_feature}")
 
     return applied_params, data_wo_abc
-
-
-# Использование:
-# abc_params_dict = {'federal_tv_A': 0.8, 'federal_tv_B': 7.5, 'federal_tv_C': 2.2, ...}
-# applied_params, data_with_abc = add_abc(abc_params_dict, data_wo_abc)
 
 
 def normalize_feature_name(feature_name):
@@ -218,6 +214,8 @@ class MMMVisualizer:
             return None
 
         clean_data = train_data[features + [target_col]].dropna()
+
+        clean_data[features].to_excel('test.xlsx', index=False)
         X = clean_data[features].values
         y = clean_data[target_col].values
         coefficients = self.coef
@@ -577,18 +575,13 @@ class MMMVisualizer:
         return result
 
 
-model_coef = [532.7297892684238, 120.03454187651681, -15.770825397486512, 825.4161500758993]
+model_coef = [5166.895538597075, -951.8111383909918, -154.37222031227492, 47.2670911556468]
 
-model_features = ['federal_tv_abc', 'Реклама_в_прессе_руб_abc', 'trend', 'is_holiday_season']
+model_features = ['all_tv_abc', 'total_competitors_abc', 'price', 'competitor_price_trend']
 
-model_abc_params = {'federal_tv_A': 0.8008045671400532,
-                    'federal_tv_B': 7.543478384254816,
-                    'federal_tv_C': 2.2158660963719794,
-
-                    'Реклама_в_прессе_руб_A': 0.4808128913025257,
-                    'Реклама_в_прессе_руб_B': 9.738981706691094,
-                    'Реклама_в_прессе_руб_C': 4.8761879232236405
-                    }
+model_abc_params = {'all_tv_A': 0.6713651234763107, 'all_tv_B': 0.7767717185068259,
+                    'all_tv_C': 4.755557929685774, 'total_competitors_A': 0.48978421319658605,
+                    'total_competitors_B': 2.500390376575637, 'total_competitors_C': 3.7045320635888737}
 
 # params = pd.read_excel('model_params.xlsx')
 

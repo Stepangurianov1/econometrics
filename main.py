@@ -255,7 +255,7 @@ class ABCOptimizer:
             abc_params[f'{param_prefix}_A'] = trial.suggest_float(f'{param_prefix}_A', 0.0, 0.9)
             abc_params[f'{param_prefix}_B'] = trial.suggest_float(f'{param_prefix}_B', 0.01, 3.0)
             abc_params[f'{param_prefix}_C'] = trial.suggest_float(f'{param_prefix}_C', 0.001, 5.0)
-
+            print(channel, 'channel')
             A = abc_params[f'{param_prefix}_A']
             B = abc_params[f'{param_prefix}_B']
             C = abc_params[f'{param_prefix}_C']
@@ -263,8 +263,10 @@ class ABCOptimizer:
             # Применяем ABC преобразование
             transformed = abc_transform(data[channel].values, A, B, C)
             transformed_feature_name = f'{param_prefix}_abc'
+
             data[transformed_feature_name] = transformed
             transformed_features.append(transformed_feature_name)
+            print(transformed_feature_name, 'transformed_feature_name')
 
         return transformed_features, abc_params
 
@@ -419,34 +421,6 @@ class ABCOptimizer:
             selected_configs[group_name] = configs[config_idx]
         return selected_configs
 
-    def _apply_transformations(self, data, selected_configs, params):
-        """
-        Применяет все преобразования (ABC и обычные) к данным
-        """
-        selected_features = []
-        for group_name, selected_channels in selected_configs.items():
-            if selected_channels is None:
-                continue
-
-            if self.abc_groups[group_name]:
-                # Применяем ABC преобразования
-                for channel in selected_channels:
-                    param_prefix = f'{channel.replace(" ", "_").replace(",", "").replace(".", "")}'
-
-                    A = params[f'{param_prefix}_A']
-                    B = params[f'{param_prefix}_B']
-                    C = params[f'{param_prefix}_C']
-
-                    transformed = abc_transform(data[channel].values, A, B, C)
-                    transformed_feature_name = f'{param_prefix}_abc'
-                    data[transformed_feature_name] = transformed
-                    selected_features.append(transformed_feature_name)
-            else:
-                # Добавляем признаки как есть
-                selected_features.extend(selected_channels)
-
-        return selected_features, data
-
     def _print_model_statistics(self, model, selected_features, data_clean, params):
         """
         Выводит статистики модели и коэффициенты
@@ -474,18 +448,11 @@ def main():
     df['Week'] = pd.to_datetime(df['Week'], format='%d.%m.%Y')
     df = df.sort_values('Week').reset_index(drop=True)
 
-    # Разделение данных
-    train_end = pd.to_datetime('2012-06-30')
-    forecast_end = pd.to_datetime('2012-12-30')
-
-    train_data = df[df['Week'] <= train_end].copy()
-    forecast_data = df[(df['Week'] > train_end) & (df['Week'] <= forecast_end)].copy()
-
-    print(f"Обучающая выборка: {len(train_data)} недель")
-    print(f"Прогнозный период: {len(forecast_data)} недель")
+    # train_data = df[df['Week'] <= train_end].copy()
+    # forecast_data = df[(df['Week'] > train_end) & (df['Week'] <= forecast_end)].copy()
 
     # Оптимизация
-    optimizer = ABCOptimizer(train_data)
+    optimizer = ABCOptimizer(df)
     best_params, best_ssr = optimizer.optimize(n_trials=200000)
 
 
