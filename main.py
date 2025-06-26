@@ -4,8 +4,12 @@ import pandas as pd
 import numpy as np
 from scipy import stats
 import optuna
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, Lasso
 import warnings
+
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import train_test_split
+from statsmodels.tsa.seasonal import seasonal_decompose
 
 warnings.filterwarnings('ignore')
 
@@ -59,11 +63,13 @@ def calculate_p_values(X, y):
     except:
         return np.ones(k)  # Возвращаем единицы при ошибке
 
+
 def append_to_csv(df, filename):
     if os.path.exists(filename):
         df.to_csv(filename, mode='a', header=False, index=False)
     else:
         df.to_csv(filename, index=False)
+
 
 def create_all_features(df):
     """
@@ -97,6 +103,11 @@ def create_all_features(df):
     df['price'] = df['Цена бренда, руб.']
     df['price_ratio_lag1'] = df['price_ratio'].shift(1)
     df['price_ratio_lag2'] = df['price_ratio'].shift(2)
+    # изменение цены относительного предыдущего года
+    df['premiumization_index'] = (
+            df['Цена бренда, руб.'] / df['Цена бренда, руб.']
+            .rolling(52).mean()
+    ).fillna(1)
 
     # Изменения цен
     df['category_price_change'] = df['Средняя цена в категории, руб.'].pct_change()
@@ -127,13 +138,18 @@ def create_all_features(df):
     df['is_autumn'] = ((df['month'] >= 9) & (df['month'] <= 11)).astype(int)
     df['is_winter'] = ((df['month'] == 12) | (df['month'] <= 2)).astype(int)
 
-    df['trend'] = range(len(df))
+    competitor_price = df['Средняя цена в категории, руб.']  # замените на правильное название
 
-    # Циклические признаки
-    df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
-    df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
-    df['week_sin'] = np.sin(2 * np.pi * df['week_of_year'] / 52)
-    df['week_cos'] = np.cos(2 * np.pi * df['week_of_year'] / 52)
+    # Декомпозиция на тренд, сезонность и остатки
+    decomposition = seasonal_decompose(competitor_price,
+                                       model='additive',  # или 'multiplicative'
+                                       period=52)  # 52 недели в году
+
+    df['competitor_price_trend'] = decomposition.trend
+    df['competitor_price_seasonal'] = decomposition.seasonal
+    df['competitor_price_residual'] = decomposition.resid
+
+    df['trend'] = range(len(df))
 
     # === ДОПОЛНИТЕЛЬНЫЕ ПРИЗНАКИ ===
 
@@ -187,21 +203,20 @@ class ABCOptimizer:
                 ['price'],
                 ['price_ratio_lag1'],
                 ['price_ratio_lag2'],
+                ['premiumization_index'],
                 None
             ],
             'seasonal': [
-                ['trend'],
-                ['is_holiday_season'],
-                ['is_spring', 'is_summer', 'is_autumn'],
-                ['trend', 'is_holiday_season'],
-                ['trend', 'is_spring', 'is_summer', 'is_autumn'],
+                ['is_spring', 'is_summer', 'is_autumn', 'is_winter'],
+                ['is_spring', 'is_summer', 'is_autumn', 'is_winter', 'is_holiday_season'],
+                ['competitor_price_seasonal'],
                 None
             ],
-            # 'interactions': [
-            #     ['price_tv_interaction'],
-            #     ['competitive_pressure'],
-            #     None
-            # ],
+            'trends': [
+                ['trend'],
+                ['competitor_price_trend'],
+                None
+            ],
             'change_price': [
                 ['category_price_change'],
                 ['avg_price_category'],
@@ -218,7 +233,8 @@ class ABCOptimizer:
             'seasonal': False,  # Сезонные признаки БЕЗ ABC
             'interactions': False,  # Взаимодействия БЕЗ ABC
             'autoregressive': False,  # Авторегрессивные БЕЗ ABC
-            'change_price': False
+            'change_price': False,
+            'trends': False
         }
 
         self.best_model = None
@@ -237,7 +253,7 @@ class ABCOptimizer:
             param_prefix = f'{channel.replace(" ", "_").replace(",", "").replace(".", "")}'
 
             abc_params[f'{param_prefix}_A'] = trial.suggest_float(f'{param_prefix}_A', 0.0, 0.9)
-            abc_params[f'{param_prefix}_B'] = trial.suggest_float(f'{param_prefix}_B', 0.01, 10.0)
+            abc_params[f'{param_prefix}_B'] = trial.suggest_float(f'{param_prefix}_B', 0.01, 3.0)
             abc_params[f'{param_prefix}_C'] = trial.suggest_float(f'{param_prefix}_C', 0.001, 5.0)
 
             A = abc_params[f'{param_prefix}_A']
@@ -301,21 +317,20 @@ class ABCOptimizer:
 
         if len(data_clean) < 20:
             return float('inf')
+        split_idx = int(len(data_clean) * 0.8)
 
-        X = data_clean[selected_features].values
-        y = data_clean[self.target_col].values
+        X_train = data_clean[selected_features].iloc[:split_idx].values
+        y_train = data_clean[self.target_col].iloc[:split_idx].values
 
-        # Проверка на константность
-        feature_vars = np.var(X, axis=0)
-        if np.any(feature_vars < 1e-10):
-            return float('inf')
+        X_test = data_clean[selected_features].iloc[split_idx:].values
+        y_test = data_clean[self.target_col].iloc[split_idx:].values
 
         try:
             model = LinearRegression()
-            model.fit(X, y)
+            model.fit(X_train, y_train)
 
-            y_pred = model.predict(X)
-            base_ssr = np.sum((y - y_pred) ** 2)
+            y_pred = model.predict(X_test)
+            base_ssr = mean_squared_error(y_test, y_pred)
 
             if np.any(np.isnan(y_pred)) or np.any(np.isinf(y_pred)):
                 return float('inf')
@@ -331,7 +346,8 @@ class ABCOptimizer:
                             media_penalty += abs(model.coef_[i]) * 1000
 
             # Остальные штрафы
-            p_values = calculate_p_values(X, y)
+            p_values = calculate_p_values(X_train, y_train)
+
             insignificant_penalty = np.sum(p_values > 0.1) * 0.05
             # complexity_penalty = max(0, (len(selected_features) - 3) * 0.01)
 
@@ -470,7 +486,7 @@ def main():
 
     # Оптимизация
     optimizer = ABCOptimizer(train_data)
-    best_params, best_ssr = optimizer.optimize(n_trials=20)
+    best_params, best_ssr = optimizer.optimize(n_trials=200000)
 
 
 if __name__ == "__main__":
