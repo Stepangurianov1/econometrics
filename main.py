@@ -1,3 +1,5 @@
+import os
+
 import pandas as pd
 import numpy as np
 from scipy import stats
@@ -57,6 +59,11 @@ def calculate_p_values(X, y):
     except:
         return np.ones(k)  # Возвращаем единицы при ошибке
 
+def append_to_csv(df, filename):
+    if os.path.exists(filename):
+        df.to_csv(filename, mode='a', header=False, index=False)
+    else:
+        df.to_csv(filename, index=False)
 
 def create_all_features(df):
     """
@@ -262,7 +269,8 @@ class ABCOptimizer:
             selected_configs[group_name] = configs[config_idx]
 
         # === ОБРАБАТЫВАЕМ КАЖДУЮ ГРУППУ ===
-
+        abc_params = None
+        print(selected_configs.items(), 'selected_configs.items()')
         for group_name, selected_channels in selected_configs.items():
             if selected_channels is None:
                 continue
@@ -326,6 +334,9 @@ class ABCOptimizer:
             p_values = calculate_p_values(X, y)
             insignificant_penalty = np.sum(p_values > 0.1) * 0.05
             # complexity_penalty = max(0, (len(selected_features) - 3) * 0.01)
+
+            if abc_params:
+                self._print_model_statistics(model, selected_features, data_clean, all_abc_params)
 
             total_penalty = media_penalty + insignificant_penalty
             penalized_ssr = base_ssr * (1 + total_penalty)
@@ -426,115 +437,20 @@ class ABCOptimizer:
         """
         X = data_clean[selected_features].values
         y = data_clean[self.target_col].values
-        abc_params = {k: v for k, v in params.items() if k.endswith('_A') or k.endswith('_B') or k.endswith('_C')}
+        # abc_params = {k: v for k, v in params.items() if k.endswith('_A') or k.endswith('_B') or k.endswith('_C')}
         y_pred = model.predict(X)
         ssr = np.sum((y - y_pred) ** 2)
         r2 = model.score(X, y)
         rmse = np.sqrt(ssr / len(y))
-
-        print(f"\n МЕТРИКИ КАЧЕСТВА:")
-        print(f"{'─' * 50}")
-        print(f"  SSR (сумма квадратов остатков): {ssr:,.0f}")
-        print(f"  R² (коэффициент детерминации):  {r2:.4f}")
-        print(f"  RMSE (среднеквадратичная ошибка): {rmse:,.0f}")
-        print(f"  Количество признаков:           {len(selected_features)}")
-        print(f"  Количество наблюдений:          {len(data_clean)}")
-
         p_values = calculate_p_values(X, y)
         df_statistic_model = pd.DataFrame()
-        df_statistic_model['features'] = selected_features
-        df_statistic_model['p-values'] = p_values
-        df_statistic_model['coef'] = model.coef_
-        list_a = []
-        list_b = []
-        list_c = []
-        for feature in selected_features:
-            feature = feature.removesuffix("_abc")
-            list_a.append(abc_params.get(f'{feature}_A', None))
-            list_b.append(abc_params.get(f'{feature}_B', None))
-            list_c.append(abc_params.get(f'{feature}_C', None))
-
-        df_statistic_model['A'] = list_a
-        df_statistic_model['B'] = list_b
-        df_statistic_model['C'] = list_c
-        df_statistic_model.to_excel('model_params.xlsx', index=False)
-        print(f"\n КОЭФФИЦИЕНТЫ И ЗНАЧИМОСТЬ:")
-        print(df_statistic_model)
-
-    def build_final_model(self, params):
-        """
-        Строит финальную модель (рефакторированная версия)
-        """
-        print(f"ФИНАЛЬНАЯ МОДЕЛЬ - РЕЗУЛЬТАТЫ")
-        print(f"{'=' * 80}")
-        # Подготовка данных
-        data = self.train_data.copy()
-
-        # Декодируем конфигурацию
-        selected_configs = self._decode_configuration(params)
-        # Применяем преобразования
-        selected_features, data = self._apply_transformations(data, selected_configs, params)
-
-        # Подготовка данных для модели
-        data_clean = data[selected_features + [self.target_col]].dropna()
-
-        data_clean.to_csv('data_with_abc.csv', index=False)
-
-        X = data_clean[selected_features].values
-        y = data_clean[self.target_col].values
-
-        model = LinearRegression()
-        model.fit(X, y)
-
-        # print(model.get_params())
-        print(model.coef_)
-
-        self._print_model_statistics(model, selected_features, data_clean, params)
-
-        return model, selected_features, data_clean
-
-    def make_forecast(self, model, features, forecast_data, best_params):
-        """
-        Делает прогноз (рефакторированная версия)
-        """
-        # Подготовка полного датасета
-        full_data = pd.concat([self.train_data, forecast_data], ignore_index=True)
-        full_prepared = create_all_features(full_data.copy())
-
-        # Декодируем конфигурацию
-        selected_configs = self._decode_configuration(best_params)
-
-        # Применяем те же преобразования
-        forecast_features, data = self._apply_transformations(full_prepared, selected_configs, best_params)
-
-        # Проверяем соответствие признаков
-        if set(forecast_features) != set(features):
-            print("  Несоответствие признаков между обучением и прогнозом")
-            print(f"   Ожидается: {features}")
-            print(f"   Получено:  {forecast_features}")
-            return None, None
-
-        # Выделяем прогнозный период
-        train_len = len(self.train_data)
-        forecast_portion = data.iloc[train_len:].copy()
-
-        # Проверяем наличие признаков
-        missing_features = [feat for feat in features if feat not in forecast_portion.columns]
-        if missing_features:
-            print(f"Отсутствующие признаки: {missing_features}")
-            return None, None
-
-        # Подготовка данных для прогноза
-        X_forecast = forecast_portion[features].values
-
-        if np.any(np.isnan(X_forecast)):
-            X_forecast = np.nan_to_num(X_forecast, 0)
-
-        y_forecast = model.predict(X_forecast)
-
-        print(f"Прогноз выполнен для {len(y_forecast)} наблюдений")
-
-        return y_forecast, forecast_portion
+        df_statistic_model['features'] = [list(selected_features)]
+        df_statistic_model['p-values'] = [list(p_values)]
+        df_statistic_model['coef'] = [list(model.coef_)]
+        df_statistic_model['r2'] = r2
+        df_statistic_model['rmse'] = rmse
+        df_statistic_model['params_abc'] = str(params)
+        append_to_csv(df_statistic_model, 'statistic_model.csv')
 
 
 def main():
@@ -554,38 +470,7 @@ def main():
 
     # Оптимизация
     optimizer = ABCOptimizer(train_data)
-    best_params, best_ssr = optimizer.optimize(n_trials=2000)
-
-    # Построение финальной модели
-    final_model, features, clean_data = optimizer.build_final_model(best_params)
-
-    # Прогнозирование
-    forecast_result = optimizer.make_forecast(final_model, features, forecast_data, best_params)
-
-    if forecast_result[0] is not None:
-        forecast_predictions, forecast_portion = forecast_result
-
-        # Оценка качества прогноза
-        actual_forecast = forecast_data['Sales'].values[:len(forecast_predictions)]
-
-        forecast_ssr = np.sum((actual_forecast - forecast_predictions) ** 2)
-
-        print(f"\nКАЧЕСТВО ПРОГНОЗА:")
-        print(f"{'─' * 50}")
-        # print(f"  SSR на прогнозном периоде: {forecast_ssr:,.0f}")
-        print(f"  RMSE прогноза: {np.sqrt(forecast_ssr / len(actual_forecast)):,.0f}")
-
-        results_df = pd.DataFrame({
-            'Week': forecast_data['Week'].iloc[:len(forecast_predictions)],
-            'Actual': actual_forecast,
-            'Predicted': forecast_predictions,
-            'Residual': actual_forecast - forecast_predictions
-        })
-
-        results_df.to_csv('forecast_results.csv', index=False)
-        print(f"езультаты сохранены в forecast_results.csv")
-    else:
-        print("Прогнозирование не удалось")
+    best_params, best_ssr = optimizer.optimize(n_trials=20)
 
 
 if __name__ == "__main__":

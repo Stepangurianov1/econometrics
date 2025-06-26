@@ -8,13 +8,63 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import FuncFormatter
 from pprint import pprint
+from sklearn.metrics import r2_score, mean_squared_error
 
-
-from main import create_all_features, abc_transform
+from main import create_all_features, abc_transform, append_to_csv
 
 plt.rcParams['figure.figsize'] = (12, 8)
 plt.rcParams['font.size'] = 10
 sns.set_style("whitegrid")
+
+
+def add_abc(abc_params_dict, data_wo_abc):
+    """
+    Применяет ABC преобразования к данным
+    abc_params_dict: словарь вида {'channel_A': value, 'channel_B': value, 'channel_C': value}
+    data_wo_abc: DataFrame с исходными данными
+    """
+    channels = set()
+    for key in abc_params_dict.keys():
+        if key.endswith(('_A', '_B', '_C')):
+            channel = key.rsplit('_', 1)[0]  # Убираем _A, _B, _C
+            channels.add(channel)
+
+    applied_params = {}
+
+    for channel in channels:
+        a_key = f'{channel}_A'
+        b_key = f'{channel}_B'
+        c_key = f'{channel}_C'
+
+        if all(key in abc_params_dict for key in [a_key, b_key, c_key]):
+            A = abc_params_dict[a_key]
+            B = abc_params_dict[b_key]
+            C = abc_params_dict[c_key]
+
+            print(f'{channel}_abc', 'qq')
+
+            # Ищем исходную колонку (убираем возможные суффиксы)
+            original_feature = channel.lower()
+
+            if original_feature in data_wo_abc.columns:
+                # Применяем ABC преобразование
+                original_values = data_wo_abc[original_feature].values
+                abc_transformed = abc_transform(original_values, A, B, C)
+                feature_name = f'{original_feature}_abc'
+                data_wo_abc[feature_name] = abc_transformed
+                applied_params[a_key] = A
+                applied_params[b_key] = B
+                applied_params[c_key] = C
+
+            else:
+                print(f"Исходная фича не найдена: {original_feature}")
+
+    return applied_params, data_wo_abc
+
+
+# Использование:
+# abc_params_dict = {'federal_tv_A': 0.8, 'federal_tv_B': 7.5, 'federal_tv_C': 2.2, ...}
+# applied_params, data_with_abc = add_abc(abc_params_dict, data_wo_abc)
 
 
 def normalize_feature_name(feature_name):
@@ -32,20 +82,42 @@ def normalize_feature_name(feature_name):
 
 
 class MMMVisualizer:
-    def __init__(self, results_df):
+    def __init__(self, coef, features, abc_params):
         """
         results_df: DataFrame с колонками features, p-values, coef, A, B, C
         """
-        self.results_df = results_df
-        features = self.results_df['features'].tolist()
+        self.coef = np.array(coef)
         features = list(map(lambda x: x.lower(), features))
-        results_df['features'] = features
+        self.features = features
+        self.abc_params = abc_params
 
     def plot_saturation_curves(self, save_path='saturation_curves.png'):
         """
         Строит кривые насыщения для каждого медиа-канала
+        model_abc_params: словарь с ABC параметрами вида {'channel_A': value, 'channel_B': value, 'channel_C': value}
         """
-        media_channels = self.results_df[self.results_df['C'].notna()].copy()
+        model_abc_params = self.abc_params
+        # Извлекаем уникальные каналы из ключей
+        channels = set()
+        for key in model_abc_params.keys():
+            if key.endswith(('_A', '_B', '_C')):
+                channel = key.rsplit('_', 1)[0]  # Убираем _A, _B, _C
+                channels.add(channel)
+
+        media_channels = []
+        for channel in channels:
+            # Проверяем что есть все три параметра
+            a_key = f'{channel}_A'
+            b_key = f'{channel}_B'
+            c_key = f'{channel}_C'
+
+            if all(key in model_abc_params for key in [a_key, b_key, c_key]):
+                media_channels.append({
+                    'name': channel,
+                    'A': model_abc_params[a_key],
+                    'B': model_abc_params[b_key],
+                    'C': model_abc_params[c_key]
+                })
 
         n_channels = len(media_channels)
         if n_channels == 0:
@@ -66,11 +138,13 @@ class MMMVisualizer:
 
         fig.suptitle('Кривые насыщения медиа-каналов', fontsize=16, fontweight='bold')
 
-        for idx, (_, row) in enumerate(media_channels.iterrows()):
+        for idx, channel_data in enumerate(media_channels):
             ax = axes[idx]
 
-            A, B, C = row['A'], row['B'], row['C']
-            channel_name = row['features'].replace('_abc', '').replace('_', ' ').title()
+            A = channel_data['A']
+            B = channel_data['B']
+            C = channel_data['C']
+            channel_name = channel_data['name'].replace('_', ' ').title()
 
             max_spend = 1000
             spend_range = np.linspace(0, max_spend, 200)
@@ -108,6 +182,7 @@ class MMMVisualizer:
                     bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.7),
                     verticalalignment='top', fontsize=9)
 
+        # Убираем лишние подграфики
         for idx in range(n_channels, len(axes)):
             axes[idx].remove()
 
@@ -115,7 +190,10 @@ class MMMVisualizer:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.show()
 
-    def create_model_from_coefficients(self, transformed_data, target_col='sales',
+    # Использование:
+    # plot_saturation_curves(model_abc_params)
+
+    def create_model_from_coefficients(self, train_data, forecast_data, abc_params, target_col='sales',
                                        intercept=None, save_path=None):
         """
         Создает модель на основе готовых коэффициентов и ABC параметров
@@ -130,48 +208,25 @@ class MMMVisualizer:
         Returns:
             dict: model_data с моделью, преобразованными данными и метаданными
         """
-
-        print("Создание модели из коэффициентов...")
-        abc_params = {}
-
-        for _, row in self.results_df.iterrows():
-            feature_name = row['features'].lower()
-            if pd.notna(row.get('A')) and pd.notna(row.get('B')) and pd.notna(row.get('C')):
-                A, B, C = row['A'], row['B'], row['C']
-                original_feature = feature_name.replace('_abc', '')
-
-                if original_feature in transformed_data.columns:
-                    original_values = transformed_data[original_feature].values
-                    abc_transformed = abc_transform(original_values, A, B, C)
-                    transformed_data[feature_name] = abc_transformed
-
-                    abc_params[f'{original_feature}_A'] = A
-                    abc_params[f'{original_feature}_B'] = B
-                    abc_params[f'{original_feature}_C'] = C
-
-                else:
-                    print(f"Исходная фича не найдена: {original_feature}")
-        # print('qwe', self.results_df['features'])
-        # print(transformed_data.columns)
-        features = self.results_df['features'].tolist()
-
-        missing_features = [f for f in features if f not in transformed_data.columns]
+        features = self.features
+        print(train_data.columns)
+        print(features)
+        missing_features = [f for f in features if f not in train_data.columns]
 
         if missing_features:
             print(f"Отсутствующие признаки: {missing_features}")
             return None
 
-        clean_data = transformed_data[features + [target_col]].dropna()
+        clean_data = train_data[features + [target_col]].dropna()
         X = clean_data[features].values
         y = clean_data[target_col].values
-        coefficients = self.results_df['coef'].values
+        coefficients = self.coef
 
         print(f"Подготовлено данных: {len(clean_data)} наблюдений, {len(features)} признаков")
 
         model = LinearRegression()
         model.coef_ = coefficients
         if intercept is None:
-            # intercept = mean(y) - mean(X @ coef)
             predicted_without_intercept = X @ coefficients
             intercept = np.mean(y) - np.mean(predicted_without_intercept)
 
@@ -180,22 +235,21 @@ class MMMVisualizer:
         model.feature_names_in_ = np.array(features)
 
         y_pred = model.predict(X)
-        r2_score = 1 - (np.sum((y - y_pred) ** 2) / np.sum((y - np.mean(y)) ** 2))
-        mse = np.mean((y - y_pred) ** 2)
+        r2_score_ = r2_score(y, y_pred)
+
+        mse = mean_squared_error(y, y_pred)
         rmse = np.sqrt(mse)
 
-        print(f"📈 Качество модели:")
-        print(f"   R²: {r2_score:.4f}")
+        print(f"Метрики на тренировочных данных:")
+        print(f"   R²: {r2_score_:.4f}")
         print(f"   RMSE: {rmse:.2f}")
 
         params = abc_params.copy()
-
         used_media = [f for f in features if '_abc' in f]
         used_price = [f for f in features if any(p in f.lower() for p in ['price', 'premium', 'discount'])]
         used_seasonal = [f for f in features if
                          any(s in f.lower() for s in ['spring', 'summer', 'autumn', 'winter', 'holiday', 'trend'])]
         used_other = [f for f in features if f not in used_media + used_price + used_seasonal]
-
         params.update({
             'used_media': used_media,
             'used_price': used_price,
@@ -205,14 +259,13 @@ class MMMVisualizer:
         })
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
         metadata = {
             'timestamp': timestamp,
             'creation_method': 'from_coefficients',
             'n_features': len(features),
             'target_col': target_col,
             'train_data_shape': clean_data.shape,
-            'r2_score': r2_score,
+            'r2_score': r2_score_,
             'rmse': rmse,
             'intercept': intercept,
             'feature_groups': {
@@ -229,17 +282,16 @@ class MMMVisualizer:
             'features': features,
             'params': params,
             'transformed_data': clean_data,
-            'coefficients_df': self.results_df,
+            'coefficients_df': self.coef,
             'metadata': metadata,
             'abc_params': abc_params
         }
-
+        result_predict = self.predict_with_model(model_data, forecast_data)
         if save_path:
             with open(save_path, 'wb') as f:
                 pickle.dump(model_data, f)
             print(f"Модель сохранена: {save_path}")
-
-        return model_data
+        return model_data, result_predict
 
     def plot_real_contribution_over_time(self, df_data, model, save_path='real_contribution.png'):
         """
@@ -248,10 +300,10 @@ class MMMVisualizer:
         model: обученная модель
         features: список фич, которые использует модель
         """
-        features = self.results_df['features'].tolist()
+        features = self.features
 
         # Проверяем что все фичи есть в данных
-        missing_features = [f for f in features if f not in df_data.columns]
+        missing_features = [f for f in features if f.replace('_abc', '') not in df_data.columns]
         if missing_features:
             print(f"Отсутствующие фичи: {missing_features}")
             return
@@ -342,7 +394,6 @@ class MMMVisualizer:
 
         # Выводим статистику вкладов
         print(f"\n СРЕДНИЕ ВКЛАДЫ ПО ФАКТОРАМ:")
-        print(f"{'─' * 50}")
 
         total_avg_contribution = {}
         for name, values in contributions.items():
@@ -362,7 +413,7 @@ class MMMVisualizer:
         """
         График эластичности факторов (% изменение Y при изменении X на 1%)
         """
-        features = self.results_df['features'].tolist()
+        features = self.features
         coefficients = model.coef_
 
         elasticities = []
@@ -422,24 +473,150 @@ class MMMVisualizer:
 
         return elasticities
 
+    def predict_with_model(self, model_data, new_data, target_col='sales'):
+        """
+        Делает прогноз с созданной моделью
 
-params = pd.read_excel('model_params.xlsx')
+        Args:
+            model_data: результат create_model_from_coefficients
+            new_data: новые данные для прогноза (DataFrame)
+            target_col: название целевой переменной
+
+        Returns:
+            dict: прогнозы и метрики качества
+        """
+
+        print(" Прогнозирование с моделью...")
+
+        # Извлекаем компоненты модели
+        model = model_data['model']
+        features = model_data['features']
+        abc_params = model_data['abc_params']
+
+        # Подготавливаем новые данные
+        forecast_data = new_data.copy()
+
+        # Проверяем наличие всех необходимых признаков
+        missing_features = [f for f in features if f not in forecast_data.columns]
+
+        if missing_features:
+
+            # Пытаемся продолжить с доступными признаками
+            available_features = [f for f in features if f in forecast_data.columns]
+            if len(available_features) < len(features) * 0.5:  # Меньше 50% признаков
+                return None
+
+            print(f"️ Продолжаем с {len(available_features)}/{len(features)} признаками")
+            # Нужно пересоздать модель с доступными признаками
+            features = available_features
+
+            # Фильтруем коэффициенты
+            available_indices = [i for i, feature in enumerate(self.features) if feature in available_features]
+
+            # Фильтруем коэффициенты
+            filtered_coefficients = [self.coef[i] for i in available_indices]
+
+            # Создаем новую модель
+            model = LinearRegression()
+            model.coef_ = filtered_coefficients
+            model.intercept_ = model_data['model'].intercept_  # Используем тот же intercept
+            model.n_features_in_ = len(features)
+            model.feature_names_in_ = np.array(features)
+
+        # Заменяем NaN на 0 (как в обучении)
+        numeric_columns = forecast_data.select_dtypes(include=[np.number]).columns
+        forecast_data[numeric_columns] = forecast_data[numeric_columns].fillna(0)
+        forecast_data[numeric_columns] = forecast_data[numeric_columns].replace([np.inf, -np.inf], 0)
+
+        # Извлекаем признаки
+        try:
+            X_forecast = forecast_data[features].values
+        except KeyError as e:
+            return None
+
+        # Делаем прогноз
+        print(f" Выполняем прогноз для {len(X_forecast)} наблюдений...")
+
+        try:
+            predictions = model.predict(X_forecast)
+        except Exception as e:
+            return None
+
+        # Результат
+        result = {
+            'predictions': predictions,
+            'forecast_data': forecast_data,
+            'used_features': features,
+            'missing_features': missing_features,
+            'n_predictions': len(predictions),
+            'prediction_stats': {
+                'mean': np.mean(predictions),
+                'std': np.std(predictions),
+                'min': np.min(predictions),
+                'max': np.max(predictions)
+            }
+        }
+
+        # Если есть фактические значения - считаем метрики
+        if target_col in forecast_data.columns:
+            actual = forecast_data[target_col].values
+
+            # Убираем NaN из сравнения
+            valid_mask = ~(np.isnan(actual) | np.isnan(predictions))
+            if np.sum(valid_mask) > 0:
+                actual_clean = actual[valid_mask]
+                pred_clean = predictions[valid_mask]
+                mse = mean_squared_error(actual_clean, pred_clean)
+                r2 = r2_score(actual_clean, pred_clean)
+                print('Метрики на тестовых данных:')
+                print(actual_clean, pred_clean)
+                print('rmse', np.sqrt(mse))
+                print('r2', r2)
+        # print(forecast_data, predictions)
+        # self.save_forecast_results(result)
+        return result
+
+
+model_coef = [532.7297892684238, 120.03454187651681, -15.770825397486512, 825.4161500758993]
+
+model_features = ['federal_tv_abc', 'Реклама_в_прессе_руб_abc', 'trend', 'is_holiday_season']
+
+model_abc_params = {'federal_tv_A': 0.8008045671400532,
+                    'federal_tv_B': 7.543478384254816,
+                    'federal_tv_C': 2.2158660963719794,
+
+                    'Реклама_в_прессе_руб_A': 0.4808128913025257,
+                    'Реклама_в_прессе_руб_B': 9.738981706691094,
+                    'Реклама_в_прессе_руб_C': 4.8761879232236405
+                    }
+
+# params = pd.read_excel('model_params.xlsx')
 
 data = pd.read_csv('data.csv', sep=';', encoding='utf-8')
 data['Week'] = pd.to_datetime(data['Week'], format='%d.%m.%Y')
-data = create_all_features(data.copy())
-# print(data.columns)
 
+data = create_all_features(data.copy())
 normalized_columns = list(map(lambda x: normalize_feature_name(x), data.columns))
 data.columns = normalized_columns
-# print(data.columns)
-visualizer = MMMVisualizer(params)
+
+train_end = pd.to_datetime('2012-06-30')
+forecast_end = pd.to_datetime('2012-12-30')
+
+dict_params, data = add_abc(model_abc_params, data)
+
+data.to_csv('data_abc.csv', index=False)
+
+train_data = data[data['week'] <= train_end].copy()
+forecast_data = data[(data['week'] > train_end) & (data['week'] <= forecast_end)].copy()
+
+visualizer = MMMVisualizer(model_coef, model_features, model_abc_params)
+
+model, result_predict = visualizer.create_model_from_coefficients(train_data, forecast_data, dict_params)
 
 # Строим все графики
+
 visualizer.plot_saturation_curves()
-model = visualizer.create_model_from_coefficients(data)
+visualizer.plot_real_contribution_over_time(train_data, model['model'])
+visualizer.plot_feature_elasticity(model['model'], train_data)
 
-visualizer.plot_real_contribution_over_time(data, model['model'])
-# visualizer.plot_feature_elasticity(model['model'], data)
-
-print(model)
+# print(model)
