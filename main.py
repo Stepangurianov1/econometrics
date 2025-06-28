@@ -71,12 +71,24 @@ def append_to_csv(df, filename):
         df.to_csv(filename, index=False)
 
 
+def extrapolate_linear_trend(data_length, intercept, slope, start_idx=0):
+    indices = np.arange(start_idx, start_idx + data_length)
+    return slope * indices + intercept
+
+
+def apply_seasonal_pattern(data_length, seasonal_pattern):
+    return np.tile(seasonal_pattern, data_length // len(seasonal_pattern) + 1)[:data_length]
+
+
 def create_all_features(df):
     """
     Создает ВСЕ возможные признаки для модели с заменой NaN на 0
     """
 
     # === ТВ КАНАЛЫ ===
+
+    split_date = '2012-06-25'
+    split_idx = df[df['Week'] <= split_date].index[0] + 1
 
     federal_channels = ['Первый Канал, ТВ Рейтинги', 'НТВ, ТВ Рейтинги', 'Пятый Канал, ТВ Рейтинги']
     df['federal_tv'] = df[federal_channels].sum(axis=1)
@@ -138,16 +150,27 @@ def create_all_features(df):
     df['is_autumn'] = ((df['month'] >= 9) & (df['month'] <= 11)).astype(int)
     df['is_winter'] = ((df['month'] == 12) | (df['month'] <= 2)).astype(int)
 
-    competitor_price = df['Средняя цена в категории, руб.']  # замените на правильное название
+    # competitor_price = df['Средняя цена в категории, руб.']  # замените на правильное название
 
     # Декомпозиция на тренд, сезонность и остатки
-    decomposition = seasonal_decompose(competitor_price,
-                                       model='additive',  # или 'multiplicative'
-                                       period=52)  # 52 недели в году
 
-    df['competitor_price_trend'] = decomposition.trend
-    df['competitor_price_seasonal'] = decomposition.seasonal
-    df['competitor_price_residual'] = decomposition.resid
+    train_data = df.loc[:split_idx]['Средняя цена в категории, руб.']
+    decomposition = seasonal_decompose(train_data,
+                                       model='additive',
+                                       period=52)
+
+    seasonal_pattern = decomposition.seasonal[:52].values
+
+    train_trend_clean = decomposition.trend.dropna()
+    train_indices = np.arange(len(train_trend_clean))
+    slope, intercept, r_value, p_value, std_err = stats.linregress(train_indices, train_trend_clean)
+
+    full_length = len(df)
+    extrapolated_trend = extrapolate_linear_trend(full_length, intercept, slope)
+    extrapolated_seasonal = apply_seasonal_pattern(full_length, seasonal_pattern)
+
+    df['competitor_price_trend'] = extrapolated_trend
+    df['competitor_price_seasonal'] = extrapolated_seasonal
 
     df['trend'] = range(len(df))
 
@@ -278,6 +301,8 @@ class ABCOptimizer:
         data = self.train_data.copy()
         selected_features = []
         all_abc_params = {}
+        # df1 =
+        split_idx = data[(data['Week'] == '2012-06-25')].index[0] + 1
 
         # === ВЫБИРАЕМ КОНФИГУРАЦИИ ===
 
@@ -319,13 +344,14 @@ class ABCOptimizer:
 
         if len(data_clean) < 20:
             return float('inf')
-        split_idx = int(len(data_clean) * 0.8)
+        # split_idx = int(len(data_clean) * 0.8)
 
-        X_train = data_clean[selected_features].iloc[:split_idx].values
-        y_train = data_clean[self.target_col].iloc[:split_idx].values
+        X_train = data_clean[selected_features][data_clean.index < split_idx].values
+        y_train = data_clean[self.target_col][data_clean.index < split_idx].values
+        X_test = data_clean[selected_features][data_clean.index >= split_idx].values
+        y_test = data_clean[self.target_col][data_clean.index >= split_idx].values
 
-        X_test = data_clean[selected_features].iloc[split_idx:].values
-        y_test = data_clean[self.target_col].iloc[split_idx:].values
+        print(X_train.shape, y_train.shape, X_test.shape, y_test.shape)
 
         try:
             model = LinearRegression()
@@ -352,9 +378,9 @@ class ABCOptimizer:
 
             insignificant_penalty = np.sum(p_values > 0.1) * 0.05
             # complexity_penalty = max(0, (len(selected_features) - 3) * 0.01)
-
+            data_clean.to_csv('data_clean_main.csv')
             if abc_params:
-                self._print_model_statistics(model, selected_features, data_clean, all_abc_params)
+                self._print_model_statistics(model, selected_features, data_clean, all_abc_params, split_idx)
 
             total_penalty = media_penalty + insignificant_penalty
             penalized_ssr = base_ssr * (1 + total_penalty)
@@ -421,18 +447,21 @@ class ABCOptimizer:
             selected_configs[group_name] = configs[config_idx]
         return selected_configs
 
-    def _print_model_statistics(self, model, selected_features, data_clean, params):
+    def _print_model_statistics(self, model, selected_features, data_clean, params, split_idx):
         """
         Выводит статистики модели и коэффициенты
         """
-        X = data_clean[selected_features].values
-        y = data_clean[self.target_col].values
+        X_train = data_clean[selected_features][data_clean.index < split_idx].values
+        y_train = data_clean[self.target_col][data_clean.index < split_idx].values
+        X_test = data_clean[selected_features][data_clean.index >= split_idx].values
+        y_test = data_clean[self.target_col][data_clean.index >= split_idx].values
+
         # abc_params = {k: v for k, v in params.items() if k.endswith('_A') or k.endswith('_B') or k.endswith('_C')}
-        y_pred = model.predict(X)
-        ssr = np.sum((y - y_pred) ** 2)
-        r2 = model.score(X, y)
-        rmse = np.sqrt(ssr / len(y))
-        p_values = calculate_p_values(X, y)
+        y_pred = model.predict(X_test)
+        ssr = np.sum((y_test - y_pred) ** 2)
+        r2 = model.score(X_test, y_test)
+        rmse = np.sqrt(ssr / len(y_test))
+        p_values = calculate_p_values(X_train, y_train)
         df_statistic_model = pd.DataFrame()
         df_statistic_model['features'] = [list(selected_features)]
         df_statistic_model['p-values'] = [list(p_values)]
@@ -447,13 +476,14 @@ def main():
     df = pd.read_csv('data.csv', sep=';', encoding='utf-8')
     df['Week'] = pd.to_datetime(df['Week'], format='%d.%m.%Y')
     df = df.sort_values('Week').reset_index(drop=True)
-
+    forecast_end = pd.to_datetime('2012-12-30')
+    df = df[df['Week'] <= forecast_end]
     # train_data = df[df['Week'] <= train_end].copy()
     # forecast_data = df[(df['Week'] > train_end) & (df['Week'] <= forecast_end)].copy()
 
     # Оптимизация
     optimizer = ABCOptimizer(df)
-    best_params, best_ssr = optimizer.optimize(n_trials=200000)
+    best_params, best_ssr = optimizer.optimize(n_trials=300)
 
 
 if __name__ == "__main__":

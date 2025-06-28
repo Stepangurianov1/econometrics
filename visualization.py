@@ -215,7 +215,8 @@ class MMMVisualizer:
 
         clean_data = train_data[features + [target_col]].dropna()
 
-        clean_data[features].to_excel('test.xlsx', index=False)
+        clean_data.to_csv('test.csv', index=False)
+
         X = clean_data[features].values
         y = clean_data[target_col].values
         coefficients = self.coef
@@ -532,7 +533,6 @@ class MMMVisualizer:
         except KeyError as e:
             return None
 
-        # Делаем прогноз
         print(f" Выполняем прогноз для {len(X_forecast)} наблюдений...")
 
         try:
@@ -559,29 +559,22 @@ class MMMVisualizer:
         if target_col in forecast_data.columns:
             actual = forecast_data[target_col].values
 
-            # Убираем NaN из сравнения
-            valid_mask = ~(np.isnan(actual) | np.isnan(predictions))
-            if np.sum(valid_mask) > 0:
-                actual_clean = actual[valid_mask]
-                pred_clean = predictions[valid_mask]
-                mse = mean_squared_error(actual_clean, pred_clean)
-                r2 = r2_score(actual_clean, pred_clean)
-                print('Метрики на тестовых данных:')
-                print(actual_clean, pred_clean)
-                print('rmse', np.sqrt(mse))
-                print('r2', r2)
+            mse = mean_squared_error(actual, predictions)
+            r2 = r2_score(actual, predictions)
+            print('Метрики на тестовых данных:')
+            print(actual, predictions)
+            print('rmse', np.sqrt(mse))
+            print('r2', r2)
         # print(forecast_data, predictions)
         # self.save_forecast_results(result)
         return result
 
 
-model_coef = [5166.895538597075, -951.8111383909918, -154.37222031227492, 47.2670911556468]
+model_coef = [1795.849314337603, 3541.7628509147316, -141.0292659448475, 51.73630466732949]
 
-model_features = ['all_tv_abc', 'total_competitors_abc', 'price', 'competitor_price_trend']
+model_features = ['federal_tv_abc', 'price_ratio_lag2', 'competitor_price_trend', 'avg_price_category']
 
-model_abc_params = {'all_tv_A': 0.6713651234763107, 'all_tv_B': 0.7767717185068259,
-                    'all_tv_C': 4.755557929685774, 'total_competitors_A': 0.48978421319658605,
-                    'total_competitors_B': 2.500390376575637, 'total_competitors_C': 3.7045320635888737}
+model_abc_params = {'federal_tv_A': 0.897141172165341, 'federal_tv_B': 2.6468467079022626, 'federal_tv_C': 0.18102005465458929}
 
 # params = pd.read_excel('model_params.xlsx')
 
@@ -600,6 +593,7 @@ dict_params, data = add_abc(model_abc_params, data)
 data.to_csv('data_abc.csv', index=False)
 
 train_data = data[data['week'] <= train_end].copy()
+print(train_data)
 forecast_data = data[(data['week'] > train_end) & (data['week'] <= forecast_end)].copy()
 
 visualizer = MMMVisualizer(model_coef, model_features, model_abc_params)
@@ -608,8 +602,8 @@ model, result_predict = visualizer.create_model_from_coefficients(train_data, fo
 
 # Строим все графики
 
-visualizer.plot_saturation_curves()
-visualizer.plot_real_contribution_over_time(train_data, model['model'])
-visualizer.plot_feature_elasticity(model['model'], train_data)
+# visualizer.plot_saturation_curves()
+# visualizer.plot_real_contribution_over_time(train_data, model['model'])
+# visualizer.plot_feature_elasticity(model['model'], train_data)
 
 # print(model)
