@@ -13,6 +13,8 @@ from statsmodels.tsa.seasonal import seasonal_decompose
 
 warnings.filterwarnings('ignore')
 
+train_end = '2012-06-25'
+
 
 def abc_transform(media_spend, A, B, C):
     """
@@ -87,8 +89,8 @@ def create_all_features(df):
 
     # === ТВ КАНАЛЫ ===
 
-    split_date = '2012-06-25'
-    split_idx = df[df['Week'] <= split_date].index[0] + 1
+    split_date = train_end
+    split_idx = df[df['Week'] <= split_date].index[-1]
 
     federal_channels = ['Первый Канал, ТВ Рейтинги', 'НТВ, ТВ Рейтинги', 'Пятый Канал, ТВ Рейтинги']
     df['federal_tv'] = df[federal_channels].sum(axis=1)
@@ -302,7 +304,7 @@ class ABCOptimizer:
         selected_features = []
         all_abc_params = {}
         # df1 =
-        split_idx = data[(data['Week'] == '2012-06-25')].index[0] + 1
+        split_idx = data[(data['Week'] == train_end)].index[0] + 1
 
         # === ВЫБИРАЕМ КОНФИГУРАЦИИ ===
 

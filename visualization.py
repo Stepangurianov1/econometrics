@@ -189,8 +189,8 @@ class MMMVisualizer:
     # Использование:
     # plot_saturation_curves(model_abc_params)
 
-    def create_model_from_coefficients(self, train_data, forecast_data, abc_params, target_col='sales',
-                                       intercept=None, save_path=None):
+    def create_model_from_coefficients(self, train_data, forecast_data, abc_params, data_to_plot,
+                                       target_col='sales', intercept=None, save_path=None):
         """
         Создает модель на основе готовых коэффициентов и ABC параметров
 
@@ -275,7 +275,10 @@ class MMMVisualizer:
             },
             'abc_transformations': len([f for f in features if '_abc' in f])
         }
-
+        clean_data['week'] = train_data['week']
+        if not data_to_plot.empty:
+            data_to_plot = data_to_plot[features + [target_col] + ['week']].dropna()
+            clean_data = pd.concat([clean_data, data_to_plot])
         model_data = {
             'model': model,
             'features': features,
@@ -295,14 +298,16 @@ class MMMVisualizer:
     def plot_real_contribution_over_time(self, df_data, model, save_path='real_contribution.png'):
         """
         Реальная декомпозиция продаж по времени
-        df_data: DataFrame с временными данными и фичами
-        model: обученная модель
-        features: список фич, которые использует модель
         """
+        import matplotlib.pyplot as plt
+        import matplotlib.cm as cm
+        import numpy as np
+        from matplotlib.ticker import FuncFormatter
+
         features = self.features
 
-        # Проверяем что все фичи есть в данных
-        missing_features = [f for f in features if f.replace('_abc', '') not in df_data.columns]
+        # Проверяем фичи
+        missing_features = [f for f in features if f not in df_data.columns]
         if missing_features:
             print(f"Отсутствующие фичи: {missing_features}")
             return
@@ -312,101 +317,121 @@ class MMMVisualizer:
         coefficients = model.coef_
         intercept = model.intercept_
 
-        # Рассчитываем вклад каждой фичи для каждого периода
+        # Рассчитываем вклады
         contributions = {}
 
-        # Константа (базовый уровень)
-        contributions['Константа'] = [intercept] * len(df_data)
+        # Константа
+        contributions['Константа'] = np.full(len(df_data), intercept)
 
-        # Вклад каждой фичи = значение_фичи * коэффициент
+        # Вклад каждой фичи
         for i, feature in enumerate(features):
             feature_contribution = df_data[feature].values * coefficients[i]
             clean_name = feature.replace('_abc', '').replace('_', ' ').title()
             contributions[clean_name] = feature_contribution
+            print(f"{clean_name}: avg={np.mean(feature_contribution):.2f}, "
+                  f"min={np.min(feature_contribution):.2f}, max={np.max(feature_contribution):.2f}")
 
         # Временная ось
         if 'Week' in df_data.columns:
-            x = df_data['Week']
+            x = pd.to_datetime(df_data['Week']) if df_data['Week'].dtype == 'object' else df_data['Week']
+            x_label = 'Дата'
+        elif 'week' in df_data.columns:
+            x = df_data['week']
             x_label = 'Недели'
         else:
             x = range(len(df_data))
             x_label = 'Период'
 
-        # Подготавливаем данные для stackplot
-        labels = list(contributions.keys())
-        y_data = list(contributions.values())
+        positive_contributions = {}
+        negative_contributions = {}
 
-        # Цвета
-        mycolors = ['lightblue', 'tab:green', 'tab:red', 'tab:orange', 'tab:brown',
-                    'tab:pink', 'tab:olive', 'tab:cyan', 'tab:purple', 'tab:gray',
-                    'darkblue', 'darkgreen', 'darkred', 'darkorange']
+        for name, values in contributions.items():
+            if np.mean(values) >= 0:
+                positive_contributions[name] = np.maximum(values, 0)  # убираем отрицательные выбросы
+            else:
+                negative_contributions[name] = np.minimum(values, 0)  # убираем положительные выбросы
 
-        # Обрезаем под количество фичей
-        colors = mycolors[:len(labels)]
+        n_factors = len(contributions)
+        colors_positive = cm.Set3(np.linspace(0, 1, len(positive_contributions)))
+        colors_negative = cm.Set1(np.linspace(0, 1, len(negative_contributions)))
 
-        # Создаем график
-        fig, ax = plt.subplots(1, 1, figsize=(16, 9), dpi=80)
+        fig, ax = plt.subplots(1, 1, figsize=(16, 10), dpi=100)
 
-        # Строим stackplot
-        ax.stackplot(x, *y_data, labels=labels, colors=colors, alpha=0.8)
+        if positive_contributions:
+            pos_labels = list(positive_contributions.keys())
+            pos_data = list(positive_contributions.values())
+            ax.stackplot(x, *pos_data, labels=pos_labels, colors=colors_positive, alpha=0.8)
 
-        # Добавляем линию фактических продаж для сравнения
-        if 'Sales' in df_data.columns:
-            actual_sales = df_data['Sales'].values
-            predicted_sales = np.sum(y_data, axis=0)
+        if negative_contributions:
+            neg_labels = list(negative_contributions.keys())
+            neg_data = list(negative_contributions.values())
+            ax.stackplot(x, *neg_data, labels=neg_labels, colors=colors_negative, alpha=0.8)
 
+        if 'sales' in df_data.columns:
+            actual_sales = df_data['sales'].values
+            predicted_sales = sum(contributions.values())
             ax.plot(x, actual_sales, 'k-', linewidth=3, label='Фактические продажи', alpha=0.9)
             ax.plot(x, predicted_sales, 'r--', linewidth=2, label='Модельный прогноз', alpha=0.9)
 
-        # Оформление в стиле примера
-        ax.set_title('Декомпозиция продаж по факторам во времени\n(Реальные данные)',
-                     fontsize=18, fontweight='bold')
-        ax.set_xlabel(x_label, fontsize=14)
-        ax.set_ylabel('Продажи', fontsize=14)
+            # Считаем качество
+            r2 = np.corrcoef(actual_sales, predicted_sales)[0, 1] ** 2
+            rmse = np.sqrt(np.mean((actual_sales - predicted_sales) ** 2))
+            print(f"R²: {r2:.3f}, RMSE: {rmse:.0f}")
 
-        # Легенда
-        ax.legend(fontsize=10, ncol=3, loc='upper left')
+        ax.set_title('Декомпозиция продаж по факторам во времени\n(Положительные и отрицательные вклады)',
+                     fontsize=16, fontweight='bold')
+        ax.set_xlabel(x_label, fontsize=12)
+        ax.set_ylabel('Продажи', fontsize=12)
+
+        ax.legend(fontsize=9, ncol=2, loc='upper left', bbox_to_anchor=(0, 1))
 
         # Форматирование осей
-        if len(x) > 20:
+        if hasattr(x, 'dt'):  # если это даты
+            ax.tick_params(axis='x', rotation=45)
+        elif len(x) > 20:
             step = len(x) // 10
-            plt.xticks(x[::step], fontsize=10, rotation=45)
-        else:
-            plt.xticks(x, fontsize=10, rotation=45)
+            plt.xticks(x[::step], rotation=45)
 
-        # Форматирование оси Y
         ax.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f'{x:,.0f}'))
 
-        # Стиль как в примере - облегчаем границы
-        plt.gca().spines["top"].set_alpha(0)
-        plt.gca().spines["bottom"].set_alpha(.3)
-        plt.gca().spines["right"].set_alpha(0)
-        plt.gca().spines["left"].set_alpha(.3)
+        # Горизонтальная линия на 0
+        ax.axhline(y=0, color='black', linestyle='-', alpha=0.3, linewidth=0.5)
 
-        # Сетка
+        # Стиль
+        ax.spines["top"].set_alpha(0)
+        ax.spines["right"].set_alpha(0)
+        ax.spines["bottom"].set_alpha(0.3)
+        ax.spines["left"].set_alpha(0.3)
         ax.grid(True, alpha=0.3)
-        ax.set_axisbelow(True)
 
         plt.tight_layout()
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.show()
 
-        # Выводим статистику вкладов
-        print(f"\n СРЕДНИЕ ВКЛАДЫ ПО ФАКТОРАМ:")
+        # Статистика вкладов
+        print(f"\n📊 СРЕДНИЕ ВКЛАДЫ ПО ФАКТОРАМ:")
+        print("=" * 50)
 
-        total_avg_contribution = {}
+        total_contributions = []
         for name, values in contributions.items():
             avg_contribution = np.mean(values)
-            total_avg_contribution[name] = avg_contribution
-            print(f"{name:<25}: {avg_contribution:>10,.0f}")
+            total_contributions.append((name, avg_contribution))
 
-        total = sum(total_avg_contribution.values())
-        print(f"{'ИТОГО':<25}: {total:>10,.0f}")
+        # Сортируем по убыванию вклада
+        total_contributions.sort(key=lambda x: abs(x[1]), reverse=True)
 
-        if 'Sales' in df_data.columns:
-            actual_avg = df_data['Sales'].mean()
-            print(f"{'Факт (среднее)':<25}: {actual_avg:>10,.0f}")
-            print(f"{'Отклонение':<25}: {total - actual_avg:>10,.0f}")
+        total = 0
+        for name, avg_contribution in total_contributions:
+            print(f"{name:<25}: {avg_contribution:>10.0f}")
+            total += avg_contribution
+
+        print("=" * 50)
+        print(f"{'ИТОГО':<25}: {total:>10.0f}")
+
+        if 'sales' in df_data.columns:
+            actual_avg = np.mean(df_data['sales'])
+            print(f"{'ФАКТ (средний)':<25}: {actual_avg:>10.0f}")
+            print(f"{'РАЗНИЦА':<25}: {total - actual_avg:>10.0f}")
 
     def plot_feature_elasticity(self, model, transformed_data, save_path='feature_elasticity.png'):
         """
@@ -471,6 +496,69 @@ class MMMVisualizer:
         plt.show()
 
         return elasticities
+
+    @staticmethod
+    def plot_train_vs_forecast(model_data, forecast_data, predictions, target_col='sales'):
+        """
+        Отрисовывает факт на train + прогноз на test
+        """
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+
+        # Получаем train данные из model_data
+        train_data = model_data['transformed_data']
+        print(train_data.columns)
+        if 'week' in train_data.columns:
+            train_dates = pd.to_datetime(train_data['week'])
+            train_actual = train_data[target_col].values
+        elif hasattr(train_data.index, 'to_pydatetime'):  # если индекс - даты
+            train_dates = train_data.index
+            train_actual = train_data[target_col].values
+        else:
+            print("⚠️ Не найден столбец с датами для отрисовки")
+            return
+
+        if 'week' in forecast_data.columns:
+            test_dates = pd.to_datetime(forecast_data['week'])
+        elif hasattr(forecast_data.index, 'to_pydatetime'):
+            test_dates = forecast_data.index
+        else:
+            test_dates = pd.date_range(start=train_dates.max(), periods=len(predictions) + 1, freq='W')[1:]
+
+        fig, ax = plt.subplots(figsize=(15, 8))
+
+        ax.plot(train_dates, train_actual, 'b-', linewidth=2, label='Факт (Train)', alpha=0.8)
+        ax.plot(test_dates, predictions, 'r--', linewidth=2, label='Прогноз (Test)', alpha=0.8)
+
+        if len(train_dates) > 0 and len(test_dates) > 0:
+            split_date = train_dates.max()
+            ax.axvline(x=split_date, color='gray', linestyle=':', alpha=0.7,
+                       label=f'Train/Test split ({split_date.strftime("%Y-%m-%d")})')
+
+        ax.set_xlabel('Дата')
+        ax.set_ylabel(target_col.title())
+        ax.set_title('Факт vs Прогноз: Train + Test данные')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        if len(train_dates) + len(test_dates) > 52:  # Если больше года данных
+            ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))  # Каждые 3 месяца
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        else:
+            ax.xaxis.set_major_locator(mdates.WeekdayLocator(interval=4))  # Каждые 4 недели
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+
+        print(f"\n📊 Статистика прогноза:")
+        print(f"Train период: {train_dates.min().strftime('%Y-%m-%d')} - {train_dates.max().strftime('%Y-%m-%d')}")
+        print(f"Test период: {test_dates.min().strftime('%Y-%m-%d')} - {test_dates.max().strftime('%Y-%m-%d')}")
+        print(f"Средний факт (train): {np.mean(train_actual):.2f}")
+        print(f"Средний прогноз (test): {np.mean(predictions):.2f}")
+        print(f"Разница средних: {np.mean(predictions) - np.mean(train_actual):.2f}")
+
+        plt.show()
 
     def predict_with_model(self, model_data, new_data, target_col='sales'):
         """
@@ -543,7 +631,7 @@ class MMMVisualizer:
         # Результат
         result = {
             'predictions': predictions,
-            'forecast_data': forecast_data,
+            # 'forecast_data': forecast_data,
             'used_features': features,
             'missing_features': missing_features,
             'n_predictions': len(predictions),
@@ -556,7 +644,7 @@ class MMMVisualizer:
         }
 
         # Если есть фактические значения - считаем метрики
-        if target_col in forecast_data.columns:
+        if target_col in forecast_data.columns and any(forecast_data[target_col]):
             actual = forecast_data[target_col].values
 
             mse = mean_squared_error(actual, predictions)
@@ -565,6 +653,9 @@ class MMMVisualizer:
             print(actual, predictions)
             print('rmse', np.sqrt(mse))
             print('r2', r2)
+        else:
+            print('kuku')
+            self.plot_train_vs_forecast(model_data, forecast_data, predictions, target_col)
         # print(forecast_data, predictions)
         # self.save_forecast_results(result)
         return result
@@ -584,26 +675,34 @@ data['Week'] = pd.to_datetime(data['Week'], format='%d.%m.%Y')
 data = create_all_features(data.copy())
 normalized_columns = list(map(lambda x: normalize_feature_name(x), data.columns))
 data.columns = normalized_columns
-
+# print(data.columns, 'qwsd')
 train_end = pd.to_datetime('2012-06-30')
-forecast_end = pd.to_datetime('2012-12-30')
+start_forecast = pd.to_datetime('2012-12-30')
+forecast_end = pd.to_datetime('2013-12-30')
 
 dict_params, data = add_abc(model_abc_params, data)
+
+if train_end != start_forecast:
+    data_to_plot = data[(data['week'] > train_end) & (data['week'] <= start_forecast)].copy()
+else:
+    data_to_plot = pd.DataFrame()
 
 data.to_csv('data_abc.csv', index=False)
 
 train_data = data[data['week'] <= train_end].copy()
-print(train_data)
-forecast_data = data[(data['week'] > train_end) & (data['week'] <= forecast_end)].copy()
+print(train_data['federal_tv_abc'])
+
+forecast_data = data[(data['week'] > start_forecast) & (data['week'] <= forecast_end)].copy()
 
 visualizer = MMMVisualizer(model_coef, model_features, model_abc_params)
 
-model, result_predict = visualizer.create_model_from_coefficients(train_data, forecast_data, dict_params)
+model, result_predict = visualizer.create_model_from_coefficients(train_data, forecast_data, dict_params, data_to_plot)
 
+print(result_predict)
 # Строим все графики
 
 # visualizer.plot_saturation_curves()
-# visualizer.plot_real_contribution_over_time(train_data, model['model'])
+visualizer.plot_real_contribution_over_time(train_data, model['model'])
 # visualizer.plot_feature_elasticity(model['model'], train_data)
 
 # print(model)
