@@ -661,11 +661,12 @@ class MMMVisualizer:
         return result
 
 
-model_coef = [1795.849314337603, 3541.7628509147316, -141.0292659448475, 51.73630466732949]
+model_coef = [1294.588029049976, 552.4451762995761, 421.6871912282488, -5194.441514006982, 5225.959302650756]
 
-model_features = ['federal_tv_abc', 'price_ratio_lag2', 'competitor_price_trend', 'avg_price_category']
+model_features = ['all_tv_abc', 'Конкурент4_ТВ_Рейтинги_abc', 'Реклама_в_прессе_руб_abc',
+                  'price_ratio_lag2', 'category_price_change']
 
-model_abc_params = {'federal_tv_A': 0.897141172165341, 'federal_tv_B': 2.6468467079022626, 'federal_tv_C': 0.18102005465458929}
+model_abc_params = {'all_tv_A': 0.76930268876457, 'all_tv_B': 2.680012318644556, 'all_tv_C': 0.11152990241973573, 'Конкурент4_ТВ_Рейтинги_A': 0.848547226100756, 'Конкурент4_ТВ_Рейтинги_B': 4.738193189915496, 'Конкурент4_ТВ_Рейтинги_C': 6.6904337762018296, 'Реклама_в_прессе_руб_A': 8.069384920890085e-05, 'Реклама_в_прессе_руб_B': 3.793595338064715, 'Реклама_в_прессе_руб_C': 0.006048598684663944}
 
 # params = pd.read_excel('model_params.xlsx')
 
@@ -676,7 +677,7 @@ data = create_all_features(data.copy())
 normalized_columns = list(map(lambda x: normalize_feature_name(x), data.columns))
 data.columns = normalized_columns
 # print(data.columns, 'qwsd')
-train_end = pd.to_datetime('2012-06-30')
+train_end = pd.to_datetime('2012-09-24')
 start_forecast = pd.to_datetime('2012-12-30')
 forecast_end = pd.to_datetime('2013-12-30')
 
@@ -690,7 +691,7 @@ else:
 data.to_csv('data_abc.csv', index=False)
 
 train_data = data[data['week'] <= train_end].copy()
-print(train_data['federal_tv_abc'])
+# print(train_data['federal_tv_abc'])
 
 forecast_data = data[(data['week'] > start_forecast) & (data['week'] <= forecast_end)].copy()
 
@@ -701,7 +702,7 @@ model, result_predict = visualizer.create_model_from_coefficients(train_data, fo
 print(result_predict)
 # Строим все графики
 
-# visualizer.plot_saturation_curves()
+visualizer.plot_saturation_curves()
 visualizer.plot_real_contribution_over_time(train_data, model['model'])
 # visualizer.plot_feature_elasticity(model['model'], train_data)
 

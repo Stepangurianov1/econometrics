@@ -13,7 +13,7 @@ from statsmodels.tsa.seasonal import seasonal_decompose
 
 warnings.filterwarnings('ignore')
 
-train_end = '2012-06-25'
+train_end = '2012-09-24'
 
 
 def abc_transform(media_spend, A, B, C):
@@ -68,9 +68,10 @@ def calculate_p_values(X, y):
 
 def append_to_csv(df, filename):
     if os.path.exists(filename):
-        df.to_csv(filename, mode='a', header=False, index=False)
+        df.to_csv(filename, mode='a', header=False, index=False,
+                  encoding='utf-8-sig')  # -sig добавляет BOM
     else:
-        df.to_csv(filename, index=False)
+        df.to_csv(filename, index=False, encoding='utf-8-sig')
 
 
 def extrapolate_linear_trend(data_length, intercept, slope, start_idx=0):
@@ -174,6 +175,26 @@ def create_all_features(df):
     df['competitor_price_trend'] = extrapolated_trend
     df['competitor_price_seasonal'] = extrapolated_seasonal
 
+    # декомпозируем для нас
+
+    train_data = df.loc[:split_idx]['Sales']
+    decomposition = seasonal_decompose(train_data,
+                                       model='additive',
+                                       period=52)
+
+    seasonal_pattern = decomposition.seasonal[:52].values
+
+    train_trend_clean = decomposition.trend.dropna()
+    train_indices = np.arange(len(train_trend_clean))
+    slope, intercept, r_value, p_value, std_err = stats.linregress(train_indices, train_trend_clean)
+
+    full_length = len(df)
+    extrapolated_trend = extrapolate_linear_trend(full_length, intercept, slope)
+    extrapolated_seasonal = apply_seasonal_pattern(full_length, seasonal_pattern)
+
+    df['our_price_trend'] = extrapolated_trend
+    df['our_price_seasonal'] = extrapolated_seasonal
+
     df['trend'] = range(len(df))
 
     # === ДОПОЛНИТЕЛЬНЫЕ ПРИЗНАКИ ===
@@ -214,7 +235,12 @@ class ABCOptimizer:
             ],
             'competitors': [
                 ['total_competitors'],
-                None
+                ['Конкурент1, ТВ Рейтинги', 'Конкурент2, ТВ Рейтинги',
+                 'Конкурент3, ТВ Рейтинги', 'Конкурент4, ТВ Рейтинги'],
+                ['Конкурент1, ТВ Рейтинги'],
+                ['Конкурент2, ТВ Рейтинги'],
+                ['Конкурент3, ТВ Рейтинги'],
+                ['Конкурент4, ТВ Рейтинги'],
             ],
             'press': [
                 ['Реклама в прессе, руб.'],
@@ -234,12 +260,14 @@ class ABCOptimizer:
             'seasonal': [
                 ['is_spring', 'is_summer', 'is_autumn', 'is_winter'],
                 ['is_spring', 'is_summer', 'is_autumn', 'is_winter', 'is_holiday_season'],
-                ['competitor_price_seasonal'],
-                None
+                ['competitor_price_seasonal', 'is_holiday_season', 'is_spring', 'is_summer', 'is_autumn', 'is_winter'],
+                ['our_price_seasonal', 'is_holiday_season', 'is_spring', 'is_summer', 'is_autumn', 'is_winter'],
+                # None
             ],
             'trends': [
-                ['trend'],
+                # ['trend'],
                 ['competitor_price_trend'],
+                # ['our_price_trend'],
                 None
             ],
             'change_price': [
@@ -278,8 +306,8 @@ class ABCOptimizer:
             param_prefix = f'{channel.replace(" ", "_").replace(",", "").replace(".", "")}'
 
             abc_params[f'{param_prefix}_A'] = trial.suggest_float(f'{param_prefix}_A', 0.0, 0.9)
-            abc_params[f'{param_prefix}_B'] = trial.suggest_float(f'{param_prefix}_B', 0.01, 3.0)
-            abc_params[f'{param_prefix}_C'] = trial.suggest_float(f'{param_prefix}_C', 0.001, 5.0)
+            abc_params[f'{param_prefix}_B'] = trial.suggest_float(f'{param_prefix}_B', 0.1, 5.0)
+            abc_params[f'{param_prefix}_C'] = trial.suggest_float(f'{param_prefix}_C', 0.001, 8)
             print(channel, 'channel')
             A = abc_params[f'{param_prefix}_A']
             B = abc_params[f'{param_prefix}_B']
@@ -304,6 +332,7 @@ class ABCOptimizer:
         selected_features = []
         all_abc_params = {}
         # df1 =
+        # print(data[(data['Week'] == train_end)])
         split_idx = data[(data['Week'] == train_end)].index[0] + 1
 
         # === ВЫБИРАЕМ КОНФИГУРАЦИИ ===
@@ -367,18 +396,18 @@ class ABCOptimizer:
             media_penalty = 0
             for i, feature in enumerate(selected_features):
                 if 'abc' in feature:  # Это медиа-признак
-                    if 'competitors' in feature:
+                    if 'competitors' in feature or 'онкурент' in feature:
                         if model.coef_[i] > 0:
                             # Большой штраф за отрицательный медиа-коэффициент
-                            media_penalty += abs(model.coef_[i]) * 1000
+                            media_penalty += abs(model.coef_[i]) * 10
                     else:
                         if model.coef_[i] < 0:
-                            media_penalty += abs(model.coef_[i]) * 1000
+                            media_penalty += abs(model.coef_[i]) * 10
 
             # Остальные штрафы
             p_values = calculate_p_values(X_train, y_train)
 
-            insignificant_penalty = np.sum(p_values > 0.1) * 0.05
+            insignificant_penalty = np.sum(p_values > 0.2) * 0.05
             # complexity_penalty = max(0, (len(selected_features) - 3) * 0.01)
             data_clean.to_csv('data_clean_main.csv')
             if abc_params:
@@ -397,9 +426,11 @@ class ABCOptimizer:
         Запуск оптимизации с декодированием результатов
         """
         study = optuna.create_study(direction='minimize')
-        study.optimize(self.objective, n_trials=n_trials, show_progress_bar=True)
+        study.optimize(self.objective, n_trials=n_trials, show_progress_bar=True, n_jobs=1,
+                       )
 
         self.best_params = study.best_params
+
         self.best_ssr = study.best_value
 
         # Декодируем лучшую конфигурацию
@@ -485,7 +516,7 @@ def main():
 
     # Оптимизация
     optimizer = ABCOptimizer(df)
-    best_params, best_ssr = optimizer.optimize(n_trials=300)
+    best_params, best_ssr = optimizer.optimize(n_trials=12000)
 
 
 if __name__ == "__main__":
