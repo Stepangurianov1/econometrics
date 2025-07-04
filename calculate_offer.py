@@ -14,6 +14,7 @@ class CalculateOffer:
         self.awards = 'award_type_rto'
         self.auditorium = 'loyal_calc'
         self.rules = self._init_rules()
+        self.plu_statistics = pd.read_csv('plu_statistics.csv')
 
     def _init_rules(self):
         return {
@@ -30,7 +31,7 @@ class CalculateOffer:
                     'award_type_cashback': lambda avg_rub: round(avg_rub * 1.2)
                 },
                 'non_loyal_threshold': {
-                    'award_type_rto': lambda avg_rub: round(avg_rub / 10) * 10,
+                    'award_type_rto': lambda avg_price: round(avg_price / 10) * 10,
                     'award_type_plu_count': lambda: 1,
                     'award_type_cashback': lambda: 0
                 },
@@ -95,55 +96,55 @@ class CalculateOffer:
             ('непродовольственные', '<=30%', '>60'): {
                 'mechanics': ['award_type_rto', 'award_type_plu_count', 'award_type_cashback'],
                 'loyal_threshold': {
-                    'award_type_rto': lambda avg_qty: max(1, round(avg_qty * 1.2)),
-                    'award_type_plu_count': lambda avg_rub: round(avg_rub * 1.2 / 10) * 10,
-                    'award_type_cashback': lambda avg_rub: round(avg_rub * 1.2 / 10) * 10
+                    'award_type_rto': lambda avg_rub: round(avg_rub * 1.2 / 10) * 10,
+                    'award_type_plu_count': lambda avg_qty: round(avg_qty * 1.2),
+                    'award_type_cashback': lambda avg_rub: round(avg_rub * 1.2 / 10) * 10,
                 },
                 'non_loyal_threshold': {
-                    'award_type_rto': lambda avg_qty: max(1, round(avg_qty * 1.2)),
-                    'award_type_plu_count': lambda avg_price: round(avg_price / 10) * 10,
+                    'award_type_rto': lambda avg_price: round(avg_price / 10) * 10,
+                    'award_type_plu_count': lambda: 1,
                     'award_type_cashback': lambda: 0
                 },
                 'loyal_offer': {
-                    'award_type_rto': lambda avg_price, plu_count: round((avg_price * 0.30 * plu_count) / 50) * 50,
-                    'award_type_plu_count': lambda threshold: round((threshold * 0.30) / 50) * 50,
+                    'award_type_rto': lambda avg_price: round((avg_price * 0.3 * len(self.plu_list)) * 10 / 50) * 50,
+                    'award_type_plu_count': lambda threshold: round((threshold * 0.3) * 10 / 50) * 50,
                     'award_type_cashback': lambda: 0.30
                 },
                 'non_loyal_offer': {
-                    'award_type_rto': lambda avg_price: round((avg_price * 0.35) / 50) * 50,
-                    'award_type_plu_count': lambda threshold: round((threshold * 0.35) / 50) * 50,
-                    'award_type_cashback': lambda: 0.35
+                    'award_type_rto': lambda avg_price: round((avg_price * 0.35) * 10 / 50) * 50,
+                    'award_type_cashback': lambda: 0.35,
+                    'award_type_plu_count': lambda avg_price: round((avg_price * 0.35) * 10 / 50) * 50,
                 }
             },
             # Непродовольственные товары <=30% <=60 руб.
             ('непродовольственные', '<=30%', '<=60'): {
                 'mechanics': ['award_type_rto', 'award_type_cashback', 'award_type_plu_count'],
                 'loyal_threshold': {
-                    'award_type_rto': lambda avg_qty: max(2, round(avg_qty * 1.2)),
-                    'award_type_cashback': lambda avg_rub: round(avg_rub * 1.2 / 10) * 10,
-                    'award_type_plu_count': lambda avg_rub: avg_rub
+                    'award_type_rto': lambda avg_rub: round(avg_rub * 1.2 / 10) * 10,
+                    'award_type_cashback': lambda avg_rub: round(avg_rub / 10) * 10,
+                    'award_type_plu_count': lambda avg_qty: round(avg_qty * 1.2),
                 },
                 'non_loyal_threshold': {
-                    'award_type_rto': lambda avg_qty: max(2, round(avg_qty * 1.2)),
-                    'award_type_cashback': lambda avg_price: round(avg_price / 2 / 10) * 10,
-                    'award_type_plu_count': lambda avg_price: round(avg_price / 2 / 10) * 10
+                    'award_type_rto': lambda avg_price: round(avg_price * 2 / 10) * 10,
+                    'award_type_cashback': lambda avg_price: round(avg_price * 2 / 10) * 10,
+                    'award_type_plu_count': 2
                 },
                 'loyal_offer': {
-                    'award_type_rto': lambda avg_price, plu_count: round((avg_price * 0.30 * plu_count) / 50) * 50,
-                    'award_type_cashback': lambda: 0.30,
-                    'award_type_plu_count': lambda threshold: round((threshold * 0.30) / 50) * 50
+                    'award_type_rto': lambda avg_price: round((avg_price * 0.3 * len(self.plu_list)) * 10 / 50) * 50,
+                    'award_type_plu_count': lambda threshold: round((threshold * 0.3) * 10 / 50) * 50,
+                    'award_type_cashback': lambda: 0.30
                 },
                 'non_loyal_offer': {
-                    'award_type_rto': lambda avg_price: round((avg_price * 0.35 * 2) / 50) * 50,
+                    'award_type_rto': lambda avg_price: round((avg_price * 0.35) * 10 / 50) * 50,
                     'award_type_cashback': lambda: 0.35,
-                    'award_type_plu_count': lambda threshold: round((threshold * 0.35) / 50) * 50
+                    'award_type_plu_count': lambda avg_price: round((avg_price * 0.35) * 10 / 50) * 50,
                 }
             },
             # Непродовольственные товары >30%
             ('непродовольственные', '>30%', 'any'): {
                 'mechanics': ['award_type_plu_count', 'award_type_cashback'],
                 'loyal_threshold': {
-                    'award_type_plu_count': lambda avg_rub: round(avg_rub * 1.2 / 10) * 10,
+                    'award_type_rto': lambda avg_rub: round(avg_rub * 1.2 / 10) * 10,
                     'award_type_cashback': lambda avg_rub: round(avg_rub * 1.2 / 10) * 10
                 },
                 'non_loyal_threshold': {
@@ -151,24 +152,23 @@ class CalculateOffer:
                     'award_type_cashback': lambda avg_rub: round(avg_rub / 10) * 10
                 },
                 'loyal_offer': {
-                    'award_type_plu_count': lambda threshold, min_price: min(round((threshold * 0.30) / 50) * 50,
-                                                                             min_price * 0.5),
+                    'award_type_plu_count': lambda threshold: min(round((threshold * 0.30) * 10 / 50) * 50,
+                                                                  self.plu_statistics['avg_price'].min() * 0.5),
                     'award_type_cashback': lambda: 0.30
                 },
                 'non_loyal_offer': {
-                    'award_type_plu_count': lambda threshold, min_price: min(round((threshold * 0.35) / 50) * 50,
-                                                                             min_price * 0.5),
+                    'award_type_plu_count': lambda threshold: min(round((threshold * 0.35) / 50) * 10 * 50,
+                                                                  self.plu_statistics['avg_price'].min() * 0.5),
                     'award_type_cashback': lambda: 0.35
                 }
             }
         }
 
-    @staticmethod
-    def _get_category_key(plu_statistics):
+    def _get_category_key(self):
         """Определяем ключ для правил на основе статистики"""
-        avg_price = round(plu_statistics['avg_price'].mean(), 2)
+        avg_price = round(self.plu_statistics['avg_price'].mean(), 2)
         diff_price_percent = round(
-            (plu_statistics['avg_price'].max() - plu_statistics['avg_price'].min()) / avg_price * 100)
+            (self.plu_statistics['avg_price'].max() - self.plu_statistics['avg_price'].min()) / avg_price * 100)
         category = 'продовольственные'
         if diff_price_percent > 30:
             price_diff = '>30%'
@@ -180,9 +180,8 @@ class CalculateOffer:
 
     def calculate_offer(self, mechanic, is_loyal, **params):
         """Расчет порога и награды"""
-        plu_statistics = pd.read_csv('plu_statistics.csv')
-        params['avg_price'] = round(plu_statistics['avg_price'].mean(), 2)
-        key = self._get_category_key(plu_statistics)
+        params['avg_price'] = round(self.plu_statistics['avg_price'].mean(), 2)
+        key = self._get_category_key()
 
         if key not in self.rules:
             raise ValueError(f"Нет правила для {key}")
