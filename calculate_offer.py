@@ -14,7 +14,7 @@ class CalculateOffer:
         self.awards = 'award_type_rto'
         self.auditorium = 'loyal_calc'
         self.rules = self._init_rules()
-        self.plu_statistics = pd.read_csv('plu_statistics.csv')
+        self.plu_statistics = pd.read_csv('plu_statistics_test.csv')
 
     def _init_rules(self):
         return {
@@ -48,8 +48,8 @@ class CalculateOffer:
                 }
             },
 
-            # Продовольственные товары <=30% <=60 руб.
-            ('продовольственные', '<=30%', '<=60'): {
+            # Продовольственные товары <30% <60 руб.
+            ('продовольственные', '<30%', '<60'): {
                 'mechanics': ['award_type_rto', 'award_type_cashback', 'award_type_plu_count'],
                 'loyal_threshold': {
                     'award_type_rto': lambda avg_rub: round(avg_rub * 1.2 / 10) * 10,
@@ -92,8 +92,8 @@ class CalculateOffer:
                     'award_type_cashback': lambda: 0.30
                 }
             },
-            # Непродовольственные товары <=30% >60 руб.
-            ('непродовольственные', '<=30%', '>60'): {
+            # Непродовольственные товары <30% >60 руб.
+            ('непродовольственные', '<30%', '>60'): {
                 'mechanics': ['award_type_rto', 'award_type_plu_count', 'award_type_cashback'],
                 'loyal_threshold': {
                     'award_type_rto': lambda avg_rub: round(avg_rub * 1.2 / 10) * 10,
@@ -116,8 +116,8 @@ class CalculateOffer:
                     'award_type_plu_count': lambda avg_price: round((avg_price * 0.35) * 10 / 50) * 50,
                 }
             },
-            # Непродовольственные товары <=30% <=60 руб.
-            ('непродовольственные', '<=30%', '<=60'): {
+            # Непродовольственные товары <30% <60 руб.
+            ('непродовольственные', '<30%', '<60'): {
                 'mechanics': ['award_type_rto', 'award_type_cashback', 'award_type_plu_count'],
                 'loyal_threshold': {
                     'award_type_rto': lambda avg_rub: round(avg_rub * 1.2 / 10) * 10,
@@ -174,8 +174,8 @@ class CalculateOffer:
             price_diff = '>30%'
             avg_price_range = 'any'
         else:
-            price_diff = '<=30%'
-            avg_price_range = '>60' if avg_price > 60 else '<=60'
+            price_diff = '<30%'
+            avg_price_range = '>60' if avg_price > 60 else '<60'
         return category, price_diff, avg_price_range
 
     def calculate_offer(self, mechanic, is_loyal, **params):
@@ -187,6 +187,7 @@ class CalculateOffer:
             raise ValueError(f"Нет правила для {key}")
 
         rule = self.rules[key]
+        print(key)
         loyalty_key = 'loyal' if is_loyal == 'loyal_calc' else 'non_loyal'
 
         # Проверяем доступность механики
