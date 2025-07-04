@@ -78,10 +78,11 @@ def normalize_feature_name(feature_name):
 
 
 class MMMVisualizer:
-    def __init__(self, coef, features, abc_params):
+    def __init__(self, coef, features, abc_params, train_data):
         """
         results_df: DataFrame с колонками features, p-values, coef, A, B, C
         """
+        self.train_data = train_data
         self.coef = np.array(coef)
         features = list(map(lambda x: x.lower(), features))
         self.features = features
@@ -89,24 +90,25 @@ class MMMVisualizer:
 
     def plot_saturation_curves(self, save_path='saturation_curves.png'):
         """
-        Строит кривые насыщения для каждого медиа-канала
-        model_abc_params: словарь с ABC параметрами вида {'channel_A': value, 'channel_B': value, 'channel_C': value}
+        Строит кривые насыщения с оптимизированными диапазонами
         """
         model_abc_params = self.abc_params
+
+        # Получаем реальные данные
+        real_media_data = self.get_real_media_levels()
+
         # Извлекаем уникальные каналы из ключей
         channels = set()
         for key in model_abc_params.keys():
             if key.endswith(('_A', '_B', '_C')):
-                channel = key.rsplit('_', 1)[0]  # Убираем _A, _B, _C
+                channel = key.rsplit('_', 1)[0]
                 channels.add(channel)
 
         media_channels = []
         for channel in channels:
-            # Проверяем что есть все три параметра
             a_key = f'{channel}_A'
             b_key = f'{channel}_B'
             c_key = f'{channel}_C'
-
             if all(key in model_abc_params for key in [a_key, b_key, c_key]):
                 media_channels.append({
                     'name': channel,
@@ -115,16 +117,14 @@ class MMMVisualizer:
                     'C': model_abc_params[c_key]
                 })
 
-        n_channels = len(media_channels)
-        if n_channels == 0:
-            print("Нет медиа-каналов для визуализации")
+        if len(media_channels) == 0:
             return
 
+        n_channels = len(media_channels)
         cols = min(3, n_channels)
         rows = (n_channels + cols - 1) // cols
 
         fig, axes = plt.subplots(rows, cols, figsize=(15, 5 * rows))
-
         if n_channels == 1:
             axes = [axes]
         elif rows == 1:
@@ -136,47 +136,78 @@ class MMMVisualizer:
 
         for idx, channel_data in enumerate(media_channels):
             ax = axes[idx]
-
             A = channel_data['A']
             B = channel_data['B']
             C = channel_data['C']
             channel_name = channel_data['name'].replace('_', ' ').title()
+            original_channel = self.map_abc_to_original_channel(channel_data['name'])
 
-            max_spend = 1000
-            spend_range = np.linspace(0, max_spend, 200)
+            # Определение диапазона на основе реальных данных
+            if original_channel in real_media_data:
+                max_historical = real_media_data[original_channel]['max']
+                mean_spend = real_media_data[original_channel]['mean']
+                base_max = max_historical * 2.5
+            else:
+                mean_spend = 25
+                base_max = 100
 
+            # Создаем предварительный диапазон для анализа
+            test_range = np.linspace(0, base_max * 2, 500)
+
+            # ABC функция
             def abc_curve(spend, a, b, c):
-                scaled = b * spend
-                saturated = (c * scaled) / (1 + c * scaled)
-                return saturated
+                if isinstance(spend, (int, float)):
+                    spend = np.array([spend])
 
+                adstocked = np.zeros_like(spend, dtype=float)
+                adstocked[0] = spend[0]
+                for i in range(1, len(spend)):
+                    adstocked[i] = spend[i] + a * adstocked[i - 1]
+
+                saturated = (c * adstocked) / (1 + c * adstocked + 1e-10)
+                final = b * saturated
+                return final
+
+            # Анализируем кривую для определения точки обрезания
+            test_response = abc_curve(test_range, A, B, C)
+            derivatives = np.gradient(test_response, test_range)
+
+            # Находим точку где производная падает до 5% от максимума
+            max_derivative = np.max(derivatives[1:20])
+            significant_growth_threshold = max_derivative * 0.05
+
+            # Точка где рост становится незначительным
+            low_growth_indices = np.where(derivatives < significant_growth_threshold)[0]
+
+            if len(low_growth_indices) > 20:
+                cutoff_idx = low_growth_indices[0]
+                optimal_max = test_range[cutoff_idx] * 1.3
+            else:
+                optimal_max = base_max
+
+            # Финальный диапазон
+            final_max = min(optimal_max, base_max)
+
+            # Создаем финальный диапазон для отображения
+            spend_range = np.linspace(0, final_max, 200)
             response = abc_curve(spend_range, A, B, C)
 
+            # Отрисовка основной кривой
             ax.plot(spend_range, response, linewidth=3, color='#2E86AB', label='Кривая отклика')
             ax.fill_between(spend_range, 0, response, alpha=0.3, color='#2E86AB')
 
-            current_spend = 500
-            current_response = abc_curve(current_spend, A, B, C)
-            ax.scatter([current_spend], [current_response], color='red', s=100,
-                       zorder=5, label='Текущий уровень')
+            # Только средний уровень (желтый шарик)
+            mean_response = abc_curve(np.array([mean_spend]), A, B, C)[0]
+            ax.scatter([mean_spend], [mean_response], color='orange', s=100,
+                       zorder=5, label=f'Средний: {mean_spend:.0f}')
 
-            ax.set_title(f'{channel_name}\nA={A:.3f}, B={B:.3f}, C={C:.3f}',
+            # Заголовок и подписи
+            ax.set_title(f'{channel_name}\nA={A:.2f}, B={B:.2f}, C={C:.2f}',
                          fontweight='bold', pad=20)
             ax.set_xlabel('Медиа-инвестиции', fontweight='bold')
             ax.set_ylabel('Прирост продаж', fontweight='bold')
             ax.grid(True, alpha=0.3)
-            ax.legend()
-
-            if C < 1:
-                saturation_text = "Быстрое насыщение"
-            elif C < 2:
-                saturation_text = "Умеренное насыщение"
-            else:
-                saturation_text = "Медленное насыщение"
-
-            ax.text(0.05, 0.95, saturation_text, transform=ax.transAxes,
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.7),
-                    verticalalignment='top', fontsize=9)
+            ax.legend(fontsize=9)
 
         # Убираем лишние подграфики
         for idx in range(n_channels, len(axes)):
@@ -551,7 +582,7 @@ class MMMVisualizer:
         plt.xticks(rotation=45)
         plt.tight_layout()
 
-        print(f"\n📊 Статистика прогноза:")
+        print(f"Статистика прогноза:")
         print(f"Train период: {train_dates.min().strftime('%Y-%m-%d')} - {train_dates.max().strftime('%Y-%m-%d')}")
         print(f"Test период: {test_dates.min().strftime('%Y-%m-%d')} - {test_dates.max().strftime('%Y-%m-%d')}")
         print(f"Средний факт (train): {np.mean(train_actual):.2f}")
@@ -559,6 +590,59 @@ class MMMVisualizer:
         print(f"Разница средних: {np.mean(predictions) - np.mean(train_actual):.2f}")
 
         plt.show()
+
+    def get_real_media_levels(self):
+        """Получает РЕАЛЬНЫЕ уровни инвестиций из данных"""
+        if self.train_data is None:
+            return {}
+
+        real_data = {}
+
+        # Маппинг ABC каналов к исходным колонкам в твоих данных
+        channel_mapping = {
+            'federal_tv': 'federal_tv',
+            'thematic_tv': 'thematic_tv',
+            'regional_tv': 'regional_tv',
+            'Конкурент1_ТВ_Рейтинги': 'конкурент1_тв_рейтинги',  # нормализованное название
+            'Конкурент2_ТВ_Рейтинги': 'конкурент2_тв_рейтинги',
+            'Конкурент3_ТВ_Рейтинги': 'конкурент3_тв_рейтинги',
+            'Конкурент4_ТВ_Рейтинги': 'конкурент4_тв_рейтинги',
+        }
+
+        print("Доступные колонки в train_data:")
+        print([col for col in self.train_data.columns if
+               any(x in col.lower() for x in ['federal', 'thematic', 'regional', 'конкурент'])])
+
+        for abc_name, original_name in channel_mapping.items():
+            if original_name in self.train_data.columns:
+                data = self.train_data[original_name].dropna()
+                if len(data) > 0:
+                    real_data[abc_name] = {
+                        'min': float(data.min()),
+                        'max': float(data.max()),
+                        'mean': float(data.mean()),
+                        'current': float(data.iloc[-1]),  # последнее значение
+                        'q75': float(data.quantile(0.75)),  # 75-й перцентиль
+                    }
+                    print(
+                        f"{abc_name}: min={real_data[abc_name]['min']:.1f}, max={real_data[abc_name]['max']:.1f}, current={real_data[abc_name]['current']:.1f}")
+            else:
+                print(f"Не найдена колонка: {original_name}")
+
+        return real_data
+
+    def map_abc_to_original_channel(self, abc_channel_name):
+        """Маппинг ABC имени к исходному"""
+        mapping = {
+            'federal_tv': 'federal_tv',
+            'thematic_tv': 'thematic_tv',
+            'regional_tv': 'regional_tv',
+            'Конкурент1_ТВ_Рейтинги': 'Конкурент1_ТВ_Рейтинги',
+            'Конкурент2_ТВ_Рейтинги': 'Конкурент2_ТВ_Рейтинги',
+            'Конкурент3_ТВ_Рейтинги': 'Конкурент3_ТВ_Рейтинги',
+            'Конкурент4_ТВ_Рейтинги': 'Конкурент4_ТВ_Рейтинги',
+        }
+        return mapping.get(abc_channel_name, abc_channel_name)
 
     def predict_with_model(self, model_data, new_data, target_col='sales'):
         """
@@ -661,12 +745,12 @@ class MMMVisualizer:
         return result
 
 
-model_coef = [1294.588029049976, 552.4451762995761, 421.6871912282488, -5194.441514006982, 5225.959302650756]
+model_coef = [475.47188011388477, 655.0730197811116, 2103.7308818153565, -237.91232243849566, -1014.3196438689523, 539.3589663504629, 2816.363174461569, -4822.073524769513, -21.195168030529913, -376.63058882530095, 114.72658571909479, 283.0991711367753, -38.63932553007724]
 
-model_features = ['all_tv_abc', 'Конкурент4_ТВ_Рейтинги_abc', 'Реклама_в_прессе_руб_abc',
-                  'price_ratio_lag2', 'category_price_change']
+model_features = ['federal_tv_abc', 'thematic_tv_abc', 'regional_tv_abc', 'Конкурент1_ТВ_Рейтинги_abc', 'Конкурент2_ТВ_Рейтинги_abc', 'Конкурент3_ТВ_Рейтинги_abc', 'Конкурент4_ТВ_Рейтинги_abc', 'price_ratio', 'is_spring', 'is_summer', 'is_autumn', 'is_winter', 'competitor_price_trend']
 
-model_abc_params = {'all_tv_A': 0.76930268876457, 'all_tv_B': 2.680012318644556, 'all_tv_C': 0.11152990241973573, 'Конкурент4_ТВ_Рейтинги_A': 0.848547226100756, 'Конкурент4_ТВ_Рейтинги_B': 4.738193189915496, 'Конкурент4_ТВ_Рейтинги_C': 6.6904337762018296, 'Реклама_в_прессе_руб_A': 8.069384920890085e-05, 'Реклама_в_прессе_руб_B': 3.793595338064715, 'Реклама_в_прессе_руб_C': 0.006048598684663944}
+# ПРАВИЛЬНЫЕ параметры для твоей функции:
+model_abc_params = {'federal_tv_A': 0.8578554509227851, 'federal_tv_B': 4.978030195753396, 'federal_tv_C': 4.744117793338168, 'thematic_tv_A': 0.8697071021624991, 'thematic_tv_B': 3.2613417490966987, 'thematic_tv_C': 0.37028284391806165, 'regional_tv_A': 0.7534743099591871, 'regional_tv_B': 0.808453454643836, 'regional_tv_C': 5.833099501032512, 'Конкурент1_ТВ_Рейтинги_A': 0.5550793311512732, 'Конкурент1_ТВ_Рейтинги_B': 1.6000699816692099, 'Конкурент1_ТВ_Рейтинги_C': 0.7746348671954331, 'Конкурент2_ТВ_Рейтинги_A': 0.6513321011751504, 'Конкурент2_ТВ_Рейтинги_B': 2.57521452253587, 'Конкурент2_ТВ_Рейтинги_C': 6.445221410745203, 'Конкурент3_ТВ_Рейтинги_A': 0.4249855292041599, 'Конкурент3_ТВ_Рейтинги_B': 0.9675091228624451, 'Конкурент3_ТВ_Рейтинги_C': 2.2449005988609114, 'Конкурент4_ТВ_Рейтинги_A': 0.7849159268740338, 'Конкурент4_ТВ_Рейтинги_B': 0.44380177532213994, 'Конкурент4_ТВ_Рейтинги_C': 5.630751549543227}
 
 # params = pd.read_excel('model_params.xlsx')
 
@@ -695,7 +779,7 @@ train_data = data[data['week'] <= train_end].copy()
 
 forecast_data = data[(data['week'] > start_forecast) & (data['week'] <= forecast_end)].copy()
 
-visualizer = MMMVisualizer(model_coef, model_features, model_abc_params)
+visualizer = MMMVisualizer(model_coef, model_features, model_abc_params, train_data=train_data)
 
 model, result_predict = visualizer.create_model_from_coefficients(train_data, forecast_data, dict_params, data_to_plot)
 

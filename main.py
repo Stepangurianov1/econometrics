@@ -305,9 +305,9 @@ class ABCOptimizer:
             # Генерируем уникальные имена параметров для каждого канала
             param_prefix = f'{channel.replace(" ", "_").replace(",", "").replace(".", "")}'
 
-            abc_params[f'{param_prefix}_A'] = trial.suggest_float(f'{param_prefix}_A', 0.0, 0.9)
-            abc_params[f'{param_prefix}_B'] = trial.suggest_float(f'{param_prefix}_B', 0.1, 5.0)
-            abc_params[f'{param_prefix}_C'] = trial.suggest_float(f'{param_prefix}_C', 0.001, 8)
+            abc_params[f'{param_prefix}_A'] = trial.suggest_float(f'{param_prefix}_A', 0.0, 0.6)
+            abc_params[f'{param_prefix}_B'] = trial.suggest_float(f'{param_prefix}_B', 0.05, 1.0)
+            abc_params[f'{param_prefix}_C'] = trial.suggest_float(f'{param_prefix}_C', 0.001, 1.5)
             print(channel, 'channel')
             A = abc_params[f'{param_prefix}_A']
             B = abc_params[f'{param_prefix}_B']
@@ -407,7 +407,7 @@ class ABCOptimizer:
             # Остальные штрафы
             p_values = calculate_p_values(X_train, y_train)
 
-            insignificant_penalty = np.sum(p_values > 0.2) * 0.05
+            insignificant_penalty = np.sum(p_values > 0.4) * 0.01
             # complexity_penalty = max(0, (len(selected_features) - 3) * 0.01)
             data_clean.to_csv('data_clean_main.csv')
             if abc_params:
@@ -416,7 +416,7 @@ class ABCOptimizer:
             total_penalty = media_penalty + insignificant_penalty
             penalized_ssr = base_ssr * (1 + total_penalty)
 
-            return penalized_ssr
+            return base_ssr
 
         except:
             return float('inf')
@@ -516,7 +516,7 @@ def main():
 
     # Оптимизация
     optimizer = ABCOptimizer(df)
-    best_params, best_ssr = optimizer.optimize(n_trials=12000)
+    best_params, best_ssr = optimizer.optimize(n_trials=20000)
 
 
 if __name__ == "__main__":
